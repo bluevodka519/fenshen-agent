@@ -139,6 +139,13 @@ def task_note(task: str) -> str:
         if t:
             hour, minute = t
             return f"（目标时间是 {hour:02d}:{minute:02d}，12 小时制写作 {hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}）"
+    if re.search(r"美团|外卖|饿了么", task):
+        from .verify import parse_quantities
+
+        if parse_quantities(task):
+            # 2026-10-29: asked for 4 oysters, the model counted its own taps on "+" and reached 16
+            return ("（数量：每样东西加了几份，看商品那一行「-」和「+」中间的数字，点到任务要的份数就停；"
+                    "写着「N份起购」的商品点一次就会加 N 份，够了就别再点「+」）")
     if re.search(r"短信|sms", task, re.I):
         # E9: "发短信" made the model reach for WeChat, and once even leave Google Messages for it.
         return "（这是手机短信：用系统自带的短信 App，也就是 Messages，不是微信）"

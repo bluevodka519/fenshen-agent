@@ -221,6 +221,47 @@ class ChangedWhileThinkingTest(unittest.TestCase):
         self.assertFalse(agent._point_still_valid(point, before, dialog))
 
 
+class QuantityTest(unittest.TestCase):
+    TASK = "帮我在美团上点一份烧烤,需要2份烤土豆片,3份烤韭菜,4份烤生蚝"
+
+    def shop(self, oysters):
+        # the Meituan search result list as the accessibility tree had it (real phone, 2026-10-29)
+        els = [Element(1, 1, "button", "烤锡纸蒜蓉生蚝（招牌必点） ¥ 6", (20, 160, 700, 420), 1, clickable=True),
+               Element(2, 2, "button", "单点不送", (300, 260, 420, 290), 1, clickable=True),
+               Element(3, 3, "button", f"减少，已添加{oysters}份", (440, 300, 500, 340), 1, clickable=True),
+               Element(4, 4, "button", str(oysters), (500, 300, 560, 340), 1, clickable=True),
+               Element(5, 5, "button", f"增加，已添加{oysters}份", (650, 295, 700, 340), 1, clickable=True),
+               Element(6, 6, "button", "锡纸蒜蓉生蚝 ¥ 6", (20, 450, 700, 700), 1, clickable=True),
+               Element(7, 7, "button", "5份起购", (560, 640, 700, 690), 1, clickable=True)]
+        return Observation(1, 7, 720, 1600, "com.sankuai.meituan", [], els, raw={})
+
+    def check(self, oysters):
+        agent, session = make(FakePhone(), Script())
+        session.task = self.TASK
+        d = {"action": "tap", "point": [673, 315], "target": 0, "text": ""}
+        obs = self.shop(oysters)
+        agent._bind_point_target(d, obs)
+        return agent._quantity_check(session, d, obs)
+
+    def test_stops_adding_at_the_asked_amount(self):
+        self.assertIsNone(self.check(3))
+        problem = self.check(4)
+        self.assertIn("已经加了 4 份", problem)
+        self.assertIn("任务要 4 份「烤生蚝」", problem)
+
+    def test_a_shop_minimum_above_the_amount_is_accepted_not_topped_up(self):
+        problem = self.check(5)  # one tap on a "5份起购" item
+        self.assertIn("起购量", problem)
+
+    def test_parsing(self):
+        from fenshen.verify import parse_quantities, wanted_quantity
+        self.assertIn(("烤生蚝", 4), parse_quantities(self.TASK))
+        self.assertEqual(parse_quantities("点两杯美式和十二串羊肉串然后结算"), [("美式", 2), ("羊肉串", 12)])
+        self.assertEqual(wanted_quantity(self.TASK, "烤土豆 ¥ 5"), (2, "烤土豆片"))  # shops shorten names
+        self.assertEqual(wanted_quantity(self.TASK, "烤木签青椒 ¥ 3"), (4, ""))  # not asked for: capped
+        self.assertEqual(wanted_quantity("帮我点瑞幸的生椰拿铁", "生椰拿铁（原创） ¥ 12.9"), (1, ""))
+
+
 class ConnectionLostTest(unittest.TestCase):
     def test_phone_going_away_is_reported_plainly_and_not_resumed(self):
         # 2026-10-29: the adb server restarted mid-task; the helper died with it and "continue" then

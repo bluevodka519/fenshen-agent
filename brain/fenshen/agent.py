@@ -24,7 +24,7 @@ from .device import VirtualDisplayDevice
 from .helper_client import ConflictError, HelperError
 from .llm import LLM, LLMError
 from .observation import Element, Observation
-from .verify import Verifier, verifier_for
+from .verify import Verifier, verifier_for, wanted_quantity
 
 # Actions the loop can execute. Point-based ones carry d["point"] (agent-display pixels).
 ACTIONS = ["launch", "tap", "fill", "submit", "scroll", "back", "wait", "ask_user", "done",
@@ -83,6 +83,8 @@ HANDOFF_ONLY = re.compile(
 # readable label: commerce apps often draw their own UI, and a guard that only reads labels would let a
 # screenshot model tap "提交订单" unseen.
 INTENT_HANDOFF = re.compile(r"(点|按|tap|click)[^。.!！?？]{0,12}(提交订单|去支付|立即支付|确认支付|付款|下单|pay)", re.I)
+# The "+" of a quantity stepper; Meituan labels it "增加，已添加16份" (the count is right there).
+STEPPER_ADD = re.compile(r"^(?:增加|加一份|\+|＋)\D{0,8}?(\d+)\s*(?:份|件|个|杯|串)")
 # Subset of HANDOFF_ONLY: a first tap is blocked with feedback instead of ending the task (see run()).
 LOGIN = re.compile(r"登录|登入|注册|sign in|log in|login", re.I)
 
@@ -286,7 +288,7 @@ class Agent:
                                 prompt_tokens=dec.prompt_tokens, output_tokens=dec.output_tokens, raw=dec.raw)
 
             # 1) the action must make sense on this screen
-            problem = self._validate(d, obs)
+            problem = self._validate(d, obs) or self._quantity_check(session, d, obs)
             if problem:
                 invalid_streak += 1
                 record.status, record.detail = "invalid", problem
@@ -530,6 +532,35 @@ class Agent:
         if action == "launch" and not d["package"]:
             return "launch 需要 package"
         return None
+
+    def _quantity_check(self, session: Session, d: dict, obs: Observation) -> str | None:
+        """'+' on a quantity stepper stops at the amount the task asks for. The model counts its own taps
+        instead of reading the count on screen: asked for 4 oysters, it kept tapping to 16 (real phone,
+        2026-10-29). Shop minimums ("5份起购") can add more than asked in one tap; that is accepted."""
+        if d["action"] not in ("tap", "double_tap"):
+            return None
+        el = self._target_element(d, obs)
+        m = STEPPER_ADD.match(el.label) if el else None
+        if not m:
+            return None
+        have = int(m.group(1))
+        product = self._product_for(el, obs)
+        want, item = wanted_quantity(session.task, product)
+        if have < want:
+            return None
+        name = re.split(r"\s*[¥￥]", product)[0] or "这个商品"
+        asked = f"任务要 {want} 份" + (f"「{item}」" if item else "")
+        more = "多出来的是店家的起购量，保持不动，最后告诉用户。" if have > want else ""
+        return f"「{name}」已经加了 {have} 份，{asked}，够了，不要再点「+」。{more}接着去加任务里的下一样东西；都加好了就去结算。"
+
+    @staticmethod
+    def _product_for(el: Element, obs: Observation) -> str:
+        """The product a stepper belongs to: the nearest priced title before it in the screen order."""
+        i = next((k for k, e in enumerate(obs.elements) if e is el), -1)
+        for e in reversed(obs.elements[max(0, i - 15):i]):
+            if re.search(r"[¥￥]", e.label) and not STEPPER_ADD.match(e.label):
+                return e.label
+        return ""
 
     def _guard(self, d: dict, obs: Observation) -> tuple[str, str] | None:
         """('handoff', msg): only the user may do this. ('confirm', msg): the user can approve this one step."""

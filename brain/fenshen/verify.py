@@ -483,6 +483,54 @@ class AllOf:
 MEITUAN_PKG = "com.sankuai.meituan"
 
 
+_CN_DIGITS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_QUANTITY = re.compile(r"(\d+|[一二两三四五六七八九十]+)\s*(?:份|个|杯|串|件|瓶|盒|碗|只|根|块|听|罐|袋)\s*"
+                       r"([^\d，,。、；;和及与\s]+?)(?=停|然后|并|再|[，,。、；;和及与\s]|$)")
+
+
+def _cn_number(s: str) -> int:
+    if s.isdigit():
+        return int(s)
+    if "十" not in s:
+        return _CN_DIGITS.get(s, 1)
+    tens, _, ones = s.partition("十")
+    return (_CN_DIGITS.get(tens, 1) if tens else 1) * 10 + _CN_DIGITS.get(ones, 0)
+
+
+def parse_quantities(task: str) -> list[tuple[str, int]]:
+    """'需要2份烤土豆片,3份烤韭菜,4份烤生蚝' -> [('烤土豆片', 2), ('烤韭菜', 3), ('烤生蚝', 4)]."""
+    return [(name, _cn_number(n)) for n, name in _QUANTITY.findall(task)]
+
+
+def _common_run(a: str, b: str) -> int:
+    """Length of the longest common substring."""
+    best = 0
+    for i in range(len(a)):
+        for j in range(i + best + 1, len(a) + 1):
+            if a[i:j] in b:
+                best = j - i
+            else:
+                break
+    return best
+
+
+def wanted_quantity(task: str, product: str) -> tuple[int, str]:
+    """How many of the product on screen the task asks for, and which task item it matched ('' if none).
+    Shops name things their own way ('烤锡纸蒜蓉生蚝' for '烤生蚝', '烤土豆' for '烤土豆片'), so the best
+    match is the item sharing the longest run of at least two characters. Unmatched: the largest amount
+    in the task (a cap, not a target); a task without amounts means one."""
+    items = parse_quantities(task)
+    best, score = None, 1
+    for name, n in items:
+        core = name.rpartition("的")[2]  # '瑞幸的生椰拿铁' -> '生椰拿铁'
+        s = _common_run(core, product)
+        if s > score:
+            best, score = (n, name), s
+    if best:
+        return best
+    return (max(n for _, n in items) if items else 1), ""
+
+
 def parse_order(task: str) -> tuple[str, str] | None:
     """'在美团点一杯瑞幸的生椰拿铁，停在提交订单前' -> (item, shop). Only for tasks that end before paying."""
     if not (re.search(r"美团|外卖", task) and re.search(r"(提交订单|付款|支付|下单)前", task)):
