@@ -481,7 +481,10 @@ class AllOf:
 class ScreenEvidenceVerifier:
     """Fallback: the evidence the model cites must actually be on the current screen."""
 
-    description = "模型给出的完成证据必须出现在当前屏幕上"
+    description = "模型给出的完成证据必须出现在当前屏幕上（任务里本来就有的数字和文字不算证据）"
+
+    def __init__(self, task: str = ""):
+        self.task = task
 
     def prepare(self, device) -> str:
         return ""
@@ -499,7 +502,18 @@ class ScreenEvidenceVerifier:
         screen = " ".join(f"{e.label} {e.text}" for e in obs.elements)
         if claimed in screen:
             return Verdict(True, "screen", f"屏幕上找到了证据文字：{claimed!r}（仅界面层面，未做系统级核实）")
-        return Verdict(False, "screen", f"屏幕上找不到证据文字 {claimed!r}")
+        # Screenshot models answer in a sentence ("结果是 8760"); look for the concrete bits instead:
+        # numbers (thousands separators ignored, "8,760" on screen) and quoted text.
+        flat = screen.replace(",", "")
+        bits = [n.replace(",", "") for n in re.findall(r"\d[\d,.]*\d", claimed)]
+        bits += re.findall(r"[「“\"]([^」”\"]{2,})[」”\"]", claimed)
+        # Inputs are not outcomes: "365" and "24" from "365 乘以 24" are on screen whether or not the
+        # answer is right (seeker run 20261029-175437 "passed" on exactly those).
+        task_flat = self.task.replace(",", "")
+        hits = [b for b in bits if b and b not in task_flat and (b in flat or b in screen)]
+        if hits:
+            return Verdict(True, "screen", f"屏幕上找到了模型给出的证据：{hits[:3]}（仅界面层面，未做系统级核实）")
+        return Verdict(False, "screen", f"屏幕上找不到证据文字 {claimed[:80]!r}")
 
 
 def verifier_for(task: str) -> Verifier:
@@ -516,4 +530,4 @@ def verifier_for(task: str) -> Verifier:
         parts.append(SmsVerifier(*sms))
     if parts:
         return parts[0] if len(parts) == 1 else AllOf(parts)
-    return ScreenEvidenceVerifier()
+    return ScreenEvidenceVerifier(task)

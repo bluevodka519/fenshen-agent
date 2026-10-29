@@ -92,6 +92,22 @@ def contact_rows(*rows):
     return "\n".join(lines)
 
 
+class ScreenEvidenceTest(unittest.TestCase):
+    def screen(self, *texts):
+        from fenshen.observation import Element, Observation
+        els = [Element(i + 1, i, "edit", "", (0, 0, 10, 10), 1, text=t, editable=True) for i, t in enumerate(texts)]
+        return Observation(1, 2, 720, 1600, "calc", [], els, raw={})
+
+    def test_result_number_on_screen(self):
+        v = ScreenEvidenceVerifier("用计算器算一下 365 乘以 24 等于多少")
+        self.assertTrue(v.check(None, self.screen("365×24", "8,760"), "365 × 24 = 8,760").ok)
+
+    def test_task_numbers_are_not_evidence(self):
+        # real phone run 20261029-175437 "passed" on 365 and 24, which are inputs, not the answer
+        v = ScreenEvidenceVerifier("用计算器算一下 365 乘以 24 等于多少")
+        self.assertFalse(v.check(None, self.screen("365×24", "8,700"), "365 × 24 = 8,760").ok)
+
+
 class ContentQueryTest(unittest.TestCase):
     def test_values_may_contain_commas(self):
         out = "Row: 0 _id=3, address=+8613800001234, type=2, body=明天下午三点开会, 别迟到\nRow: 1 _id=4, address=10086, type=1, body=hi"

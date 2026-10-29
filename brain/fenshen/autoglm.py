@@ -44,6 +44,7 @@ APP_ALIASES = {
     # Chinese names of the stock apps, whose launcher labels are English on this image ("Messages").
     "短信": "com.google.android.apps.messaging", "信息": "com.google.android.apps.messaging",
     "消息": "com.google.android.apps.messaging", "SMS": "com.google.android.apps.messaging",
+    "计算器": "com.google.android.calculator", "浏览器": "com.android.chrome", "相册": "com.google.android.apps.photos",
     "电话": "com.google.android.dialer", "拨号": "com.google.android.dialer", "相机": "com.android.camera2",
     "地图": "com.google.android.apps.maps", "照片": "com.google.android.apps.photos", "文件": "com.google.android.documentsui",
 }
