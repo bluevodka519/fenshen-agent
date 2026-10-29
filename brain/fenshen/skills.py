@@ -92,10 +92,38 @@ SKILLS = [
             "短信 App 发短信：首页右下角点 Start chat 新建对话；在顶部 To 输入框里输入联系人名字或号码，"
             "再点下面列表里出现的那个联系人；进入对话后点底部的输入框（Text message）再 Type 短信内容，"
             "最后点右边的发送按钮。发送前系统会请用户确认，这是正常的。"
+            "输入号码后如果打开的是某个联系人的对话，说明这个号码就是那个联系人的，直接在这个对话里发即可。"
             "如果弹出聊天功能、RCS 一类的推广，点 Not now / No thanks 跳过，不要开启任何功能。"
         ),
     ),
 ]
+
+
+# System permission dialogs: shown by package only (never matched by task words). Declining is the
+# default; granting needs the user anyway (NEEDS_CONFIRM matches "Allow"). In the 2026-10-29 benchmark
+# the model chose "Allow" for a notification prompt and two contact tasks stopped for the user.
+_PERMISSION_TIP = (
+    "这是系统的权限请求弹窗。任务用不到这个权限时（例如通知权限），点 Don't allow / 不允许，然后继续任务；"
+    "只有任务确实离不开这个权限时才选允许，那一步会交给用户确认。"
+)
+for _pkg in ("com.google.android.permissioncontroller", "com.android.permissioncontroller"):
+    SKILLS.append(Skill(package=_pkg, keywords=r"(?!)", text=_PERMISSION_TIP, visual=_PERMISSION_TIP))
+
+
+def task_note(task: str) -> str:
+    """A short normalization appended to the task itself: models weigh the task text more than tips
+    (AutoGLM typed "22" into a 1-12 hour box although the tip said 10)."""
+    if re.search(r"闹钟|alarm|叫我起床", task, re.I):
+        from .verify import parse_time
+
+        t = parse_time(task)
+        if t:
+            hour, minute = t
+            return f"（目标时间是 {hour:02d}:{minute:02d}，12 小时制写作 {hour % 12 or 12}:{minute:02d} {'AM' if hour < 12 else 'PM'}）"
+    if re.search(r"短信|sms", task, re.I):
+        # E9: "发短信" made the model reach for WeChat, and once even leave Google Messages for it.
+        return "（这是手机短信：用系统自带的短信 App，也就是 Messages，不是微信）"
+    return ""
 
 
 def relevant(task: str, package: str, visual: bool = False, installed: set[str] | None = None) -> list[str]:

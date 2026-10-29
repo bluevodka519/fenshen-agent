@@ -77,11 +77,15 @@ HANDOFF_ONLY = re.compile(
     r"|\bpay\b|payment|purchase|\bbuy\b|place order|checkout|sign in|log in|login|password|verification code|\botp\b",
     re.I,
 )
+# Subset of HANDOFF_ONLY: a first tap is blocked with feedback instead of ending the task (see run()).
+LOGIN = re.compile(r"登录|登入|注册|sign in|log in|login", re.I)
+
 # Irreversible but fine to delegate: the agent may do these after the user approves that one step.
 # Sending a message speaks for the user to someone else, so it is approved step by step as well.
 # Granting a runtime permission ("Allow", "允许") counts too; declining ("Don't allow", "不允许") does not
 # (run 20261028-120009: a notification-permission dialog came up and only the model's choice kept it safe).
-NEEDS_CONFIRM = re.compile(r"删除|移除|清空|同意|授权|发送|(?<!不)允许|delete|remove|erase|\bagree\b|accept|\bsend\b"
+# "Send to (380) 000-1234" is Messages' recipient suggestion, not sending (E9): excluded.
+NEEDS_CONFIRM = re.compile(r"删除|移除|清空|同意|授权|发送(?!给)|(?<!不)允许|delete|remove|erase|\bagree\b|accept|\bsend\b(?!\s+to\b)"
                            r"|(?<![’']t )\ballow\b|only this time|仅此一次", re.I)
 
 
@@ -187,6 +191,7 @@ class Session:
         self.waiting: dict | None = None  # set while waiting for the user to leave an app
         self.pending: dict | None = None  # a guarded action the user may approve (NEEDS_CONFIRM only)
         self.approved = False
+        self.login_blocks: dict[str, int] = {}  # login buttons the model tapped once already
         self.decider_state: dict = {}  # private memory of the decider (e.g. AutoGLM's conversation)
         self.outcome: Outcome | None = None
         self.verifier: Verifier = verifier_for(task)
@@ -290,6 +295,18 @@ class Agent:
             guard = self._guard(d, obs)
             if guard:
                 kind, message = guard
+                el = self._target_element(d, obs)
+                if (kind == "handoff" and el is not None and LOGIN.search(el.label) and not el.password
+                        and session.login_blocks.get(el.label, 0) == 0):
+                    # A login button tapped by mistake (E9: the account avatar "Sign in" taken for a
+                    # contacts icon). Never executed; the model gets one chance to take another route.
+                    # A second attempt means login is really needed, and that is the user's.
+                    session.login_blocks[el.label] = 1
+                    record.status, record.detail = "guarded", f"已拦下「{el.label}」（登录类，没有执行）"
+                    self._record(session, record)
+                    feedback = (f"上一步没有执行：「{el.label}」是登录入口，分身不能替用户登录。"
+                                "如果任务不需要登录，请换别的路径；如果确实必须登录才能继续，请交给用户。")
+                    continue
                 record.status, record.detail = "guarded", message
                 self._record(session, record)
                 if kind == "confirm":
@@ -455,8 +472,8 @@ class Agent:
 
     def _validate(self, d: dict, obs: Observation) -> str | None:
         action = d["action"]
-        if action == "invalid":
-            return f"无法解析模型输出的动作：{d['text']}"
+        if action == "invalid":  # the decider already knows why (unparseable output, app not installed…)
+            return d["text"] or "模型输出的动作无效"
         if action not in ACTIONS:
             return f"未知动作 {action!r}"
         if action == "fill" and not d["target"] and d.get("point") is None:

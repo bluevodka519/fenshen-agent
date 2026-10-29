@@ -100,6 +100,34 @@ class ContentQueryTest(unittest.TestCase):
         self.assertEqual(rows[1], {"_id": "4", "address": "10086", "type": "1", "body": "hi"})
 
 
+BAD_ADDRESS = '13900001111")\n`'  # what E9 actually stored: the model's trailing code fence leaked in
+
+
+class MalformedValueTest(unittest.TestCase):
+    def test_value_with_newline_stays_in_its_row(self):
+        out = f"Row: 0 _id=3, address={BAD_ADDRESS}, type=2, body=周五晚上一起吃饭吗\nRow: 1 _id=4, address=10086, type=1, body=hi"
+        rows = content_query(FakeAdb({"u": out}), "u", ["_id", "address", "type", "body"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0]["type"], "2")
+        self.assertEqual(rows[0]["address"], BAD_ADDRESS)
+
+    def test_garbage_around_digits_is_not_the_number(self):
+        from fenshen.verify import _same_number
+        self.assertTrue(_same_number("+86 139-0000-1111", "13900001111"))
+        self.assertTrue(_same_number("1 (390) 000-1111", "13900001111"))
+        self.assertFalse(_same_number(BAD_ADDRESS, "13900001111"))
+
+    def test_sms_to_a_malformed_address_stops_the_task(self):
+        tables = {CONTACTS: contact_rows(("3", "孙悦", "phone_v2", "13900001111")),
+                  "content://sms": ""}
+        dev = FakeDevice(tables)
+        v = SmsVerifier("孙悦", "周五晚上一起吃饭吗")
+        v.prepare(dev)
+        tables["content://sms"] = f"Row: 0 _id=3, address={BAD_ADDRESS}, type=2, body=周五晚上一起吃饭吗"
+        self.assertFalse(v.goal_reached(dev))
+        self.assertIn("不对的短信", v.unintended_change(dev))
+
+
 class ContactVerifierTest(unittest.TestCase):
     def test_exactly_one_new_contact(self):
         tables = {CONTACTS: ""}

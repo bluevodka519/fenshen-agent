@@ -300,10 +300,14 @@ def content_query(adb: Adb, uri: str, projection: list[str]) -> list[dict]:
     """`content query` as the shell user, parsed. Shell may read the contacts and SMS providers, so
     these checks do not depend on what any app shows on screen."""
     out = adb.shell("content", "query", "--uri", uri, "--projection", ":".join(projection), check=False)
+    records: list[str] = []
+    for line in out.splitlines():  # a value with a newline continues on the next line(s)
+        if line.startswith("Row:"):
+            records.append(line)
+        elif records:
+            records[-1] += "\n" + line
     rows = []
-    for line in out.splitlines():
-        if not line.startswith("Row:"):
-            continue
+    for line in records:
         row, pos = {}, line.find(f" {projection[0]}=")
         for i, key in enumerate(projection):  # values may contain ", ": split on the known keys, in order
             start = pos + len(key) + 2
@@ -318,9 +322,16 @@ def _digits(s: str) -> str:
     return re.sub(r"\D", "", s or "")
 
 
+_PHONE_LIKE = re.compile(r"\+?[\d\s\-().]+")
+
+
 def _same_number(a: str, b: str) -> bool:
+    """Same phone number, ignoring country code and formatting, but only if both look like phone
+    numbers: E9 stored `13900001111")` + newline + backtick, whose digits alone would have matched."""
+    if not (_PHONE_LIKE.fullmatch((a or "").strip()) and _PHONE_LIKE.fullmatch((b or "").strip())):
+        return False
     a, b = _digits(a), _digits(b)
-    return bool(a) and bool(b) and (a[-8:] == b[-8:])  # ignore country code / formatting
+    return bool(a) and bool(b) and (a[-8:] == b[-8:])
 
 
 def _norm_text(s: str) -> str:

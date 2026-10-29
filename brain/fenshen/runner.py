@@ -117,6 +117,7 @@ class Runner:
         self.notifier = Notifier(self.adb) if notify else None
         self._labels: dict[str, str] | None = None
         self.max_steps = max_steps
+        self._tasks_started = 0
         self.agent: Agent | None = None
         self._mirror_proc: subprocess.Popen | None = None
 
@@ -196,6 +197,13 @@ class Runner:
     def run(self, session: Session) -> Outcome:
         assert self.agent is not None, "call start() first"
         if not getattr(session, "prepared", False):
+            if self._tasks_started:
+                # Every task starts on a fresh agent display, like a phone on its home screen. Reusing it
+                # left the previous task's app (and an open permission dialog) in front: an SMS task then
+                # spent 24 steps searching Contacts (2026-10-29). DESTROY_CONTENT_ON_REMOVAL cleans up.
+                self.device.close()
+                self.device.start()
+            self._tasks_started += 1
             try:
                 baseline = session.verifier.prepare(self.device)
                 blocked = getattr(session.verifier, "blocked_by", None)

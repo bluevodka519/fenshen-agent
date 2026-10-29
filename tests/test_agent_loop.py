@@ -149,8 +149,30 @@ class GuardTest(unittest.TestCase):
             self.assertTrue(HANDOFF_ONLY.search(label), label)
         for label in ["Send SMS", "Delete", "Allow", "允许", "Only this time", "同意并继续"]:
             self.assertTrue(NEEDS_CONFIRM.search(label), label)
-        for label in ["Don’t allow", "Don't allow", "不允许", "OK", "Cancel", "Start chat"]:
+        for label in ["Don’t allow", "Don't allow", "不允许", "OK", "Cancel", "Start chat", "Send to (380) 000-1234 +13800001234"]:
             self.assertFalse(NEEDS_CONFIRM.search(label) or HANDOFF_ONLY.search(label), label)
+
+
+class LoginTest(unittest.TestCase):
+    def test_login_tapped_by_mistake_is_blocked_once_then_handed_off(self):
+        phone = FakePhone()
+        base = phone.observe
+
+        def with_avatar():
+            o = base()
+            o.elements.append(Element(9, 19, "button", "Sign in", (620, 40, 700, 110), 1, clickable=True))
+            return o
+
+        phone.observe = with_avatar
+        # first tap on "Sign in": not executed, the model is told to take another route (it fills the text);
+        # second tap on it: login is really wanted, so the user takes over
+        agent, session = make(phone, Script(("tap", 9, ""), ("fill", 1, "你好"), ("tap", 9, "")))
+        out = agent.run(session)
+        self.assertEqual(out.status, "needs_user")
+        self.assertIsNone(session.pending)
+        self.assertNotIn(("click", "Sign in"), phone.actions)
+        self.assertIn(("fill", "Text message", "你好"), phone.actions)
+        self.assertIn("登录入口", agent.decider.feedback[1])
 
 
 class StopTest(unittest.TestCase):

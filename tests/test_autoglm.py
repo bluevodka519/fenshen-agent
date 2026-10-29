@@ -37,6 +37,20 @@ class SkillTest(unittest.TestCase):
         self.assertTrue(skills.relevant("x", "com.google.android.deskclock", True, installed=set()))
 
 
+class TaskNoteTest(unittest.TestCase):
+    def test_alarm_target_in_12h(self):
+        from fenshen import skills
+        self.assertIn("10:00 PM", skills.task_note("设一个晚上10点的闹钟"))
+        self.assertIn("12:00 PM", skills.task_note("帮我定一个中午12点的闹钟"))
+        self.assertIn("不是微信", skills.task_note("给张伟发短信：你好"))  # E9: "短信" made it reach for WeChat
+        self.assertEqual(skills.task_note("新建联系人李雷，电话13900001111"), "")
+
+    def test_permission_tip_by_screen_only(self):
+        from fenshen import skills
+        self.assertTrue(skills.relevant("新建联系人李雷", "com.google.android.permissioncontroller", True))
+        self.assertFalse(any("权限请求" in t for t in skills.relevant("新建联系人李雷", "", True)))
+
+
 class ParseTest(unittest.TestCase):
     def test_split(self):
         self.assertEqual(split_response('<think>点加号</think><answer>do(action="Tap", element=[842,775])</answer>'),
@@ -51,6 +65,13 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(parse_action('finish(message="完成")'), {"_metadata": "finish", "message": "完成"})
         with self.assertRaises(ValueError):
             parse_action("tap somewhere")
+
+    def test_type_with_a_trailing_code_fence(self):
+        # E9: upstream's slicing typed '13900001111")' + newline + backtick into a phone number
+        a = parse_action('do(action="Type", text="13900001111")\n```')
+        self.assertEqual(a["text"], "13900001111")
+        # quotes inside the text survive: it ends at the last '")'
+        self.assertEqual(parse_action('do(action="Type", text="他说"好的"")')["text"], '他说"好的"')
 
 
 class DecisionTest(unittest.TestCase):
@@ -77,8 +98,12 @@ class DecisionTest(unittest.TestCase):
         self.assertEqual(d["package"], "com.google.android.deskclock")
         d = self.d._to_decision({"_metadata": "do", "action": "Launch", "app": "短信"}, obs(), "", {})
         self.assertEqual(d["package"], "com.google.android.apps.messaging")  # label is "Messages" on this image
-        d = self.d._to_decision({"_metadata": "do", "action": "Launch", "app": "支付宝"}, obs(), "", {})
-        self.assertEqual(d["package"], "")  # not installed: the loop rejects it instead of guessing
+        # not installed, even when an alias exists (微信): tell the model what this phone does have
+        for name in ("支付宝", "微信"):
+            d = self.d._to_decision({"_metadata": "do", "action": "Launch", "app": name}, obs(), "", {})
+            self.assertEqual(d["action"], "invalid")
+            self.assertIn("没有安装", d["text"])
+            self.assertIn("Messages", d["text"])
         d = self.d._to_decision({"_metadata": "do", "action": "Launch", "app": "messages"}, obs(), "", {})
         self.assertEqual(d["package"], "com.google.android.apps.messaging")
 

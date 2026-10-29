@@ -46,6 +46,8 @@ def _post_json(url: str, payload: dict, headers: dict | None = None, timeout: fl
         raise LLMError(f"{url} -> HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:500]}") from e
     except urllib.error.URLError as e:
         raise LLMError(f"{url} unreachable: {e.reason}") from e
+    except TimeoutError as e:  # a read timeout is not a URLError; keep it an LLMError so callers retry or stop
+        raise LLMError(f"{url} timed out after {timeout:g}s") from e
 
 
 def _parse(raw: str) -> dict:

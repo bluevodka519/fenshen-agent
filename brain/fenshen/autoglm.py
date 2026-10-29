@@ -21,6 +21,7 @@ import datetime as dt
 import io
 import json
 import os
+import re
 import sys
 import time
 
@@ -42,6 +43,7 @@ APP_ALIASES = {
     "日历": "com.google.android.calendar", "Calendar": "com.google.android.calendar",
     # Chinese names of the stock apps, whose launcher labels are English on this image ("Messages").
     "短信": "com.google.android.apps.messaging", "信息": "com.google.android.apps.messaging",
+    "消息": "com.google.android.apps.messaging", "SMS": "com.google.android.apps.messaging",
     "电话": "com.google.android.dialer", "拨号": "com.google.android.dialer", "相机": "com.android.camera2",
     "地图": "com.google.android.apps.maps", "照片": "com.google.android.apps.photos", "文件": "com.google.android.documentsui",
 }
@@ -156,6 +158,36 @@ def input_ready_cue(jpeg: bytes, obs: Observation, focused) -> bytes:
     return out.getvalue()
 
 
+DESKTOP_CUE = ("HOME SCREEN - phone is unlocked", "use Launch to open an app")
+
+
+def desktop_cue(jpeg: bytes) -> bytes:
+    """The agent display's desktop is a bare wallpaper with a taskbar, unlike a phone home screen
+    full of icons, and AutoGLM kept taking it for a lock screen (swiping to "unlock", tapping the
+    wallpaper) even with a text hint saying otherwise (E9). Like the keyboard cue, say it visually,
+    on the image sent to the model only."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        return jpeg
+    img = Image.open(io.BytesIO(jpeg)).convert("RGB")
+    draw = ImageDraw.Draw(img)
+    size = max(12, img.width // 22)
+    try:
+        font = ImageFont.truetype("arial.ttf", size)
+    except OSError:
+        font = ImageFont.load_default(size=size)
+    top = int(img.height * 0.38)
+    draw.rectangle([0, top, img.width, top + int(size * 3.6)], fill=(32, 32, 32))
+    for i, line in enumerate(DESKTOP_CUE):
+        l, t, r, b = draw.textbbox((0, 0), line, font=font)
+        draw.text(((img.width - (r - l)) / 2 - l, top + size * 0.5 + i * size * 1.4 - t), line,
+                  fill=(240, 240, 240), font=font)
+    out = io.BytesIO()
+    img.save(out, "JPEG", quality=85)
+    return out.getvalue()
+
+
 def blank_frame(obs: Observation) -> bytes:
     """No frame yet: nothing has been drawn on the agent display (e.g. right after boot there is no
     launcher on it), so what it shows is literally black."""
@@ -189,7 +221,20 @@ class AutoGLMClient:
         self.model = model
         self.base_url = (base_url or os.environ.get("ZHIPU_BASE_URL") or BASE_URL).rstrip("/")
 
-    def chat(self, messages: list[dict]) -> tuple[str, int, dict]:
+    def chat(self, messages: list[dict], retries: int = 2) -> tuple[str, int, dict]:
+        """One completion. Transient server errors are retried (E9: a single HTTP 500 failed a task);
+        client errors such as a bad key or quota are not."""
+        for attempt in range(retries + 1):
+            try:
+                return self._chat_once(messages)
+            except LLMError as e:
+                transient = re.search(r"HTTP 5\d\d|HTTP 429|unreachable|timed out", str(e))
+                if not transient or attempt == retries:
+                    raise
+                time.sleep(2 * (attempt + 1))
+        raise AssertionError("unreachable")
+
+    def _chat_once(self, messages: list[dict]) -> tuple[str, int, dict]:
         t = time.perf_counter()
         resp = _post_json(
             f"{self.base_url}/chat/completions",
@@ -226,12 +271,27 @@ def split_response(content: str) -> tuple[str, str]:
     return "", content.strip()
 
 
-def parse_action(s: str) -> dict:
-    """Port of Open-AutoGLM's parse_action: do(action="X", k=literal, ...) or finish(message="...")."""
+def _strip_trailer(s: str) -> str:
+    """Drop what models sometimes append after the call: a closing code fence, stray backticks."""
     s = s.strip()
+    while s.endswith("```") or s.endswith("`"):
+        s = s.rstrip("`").rstrip()
+    return s
+
+
+def parse_action(s: str) -> dict:
+    """do(action="X", k=literal, ...) or finish(message="..."), after Open-AutoGLM's parse_action.
+
+    Upstream takes Type's text as `s.split("text=")[1][1:-2]`, i.e. "everything but the last two
+    characters". When the model appends a code fence, that leaks `")` + newline + backtick into the
+    text, and E9 typed exactly that into a contact's phone number. Here the text ends at the last `")`."""
+    s = _strip_trailer(s)
     if s.startswith('do(action="Type"') or s.startswith('do(action="Type_Name"'):
-        text = s.split("text=", 1)[1][1:-2]
-        return {"_metadata": "do", "action": "Type", "text": text}
+        body = s.split("text=", 1)[1]
+        end = body.rfind('")')
+        if not body.startswith('"') or end <= 0:
+            raise ValueError(f"cannot parse Type action {s!r}")
+        return {"_metadata": "do", "action": "Type", "text": body[1:end]}
     if s.startswith("do"):
         escaped = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
         try:
@@ -270,14 +330,21 @@ class AutoGLMDecider:
         return self._apps
 
     def _resolve(self, name: str) -> str:
+        """Package for an app name, only if that app is installed (aliases cover names the model uses
+        for apps whose launcher label differs, e.g. 短信 -> Messages)."""
         table = self._app_table()
-        if name in table:
+        installed = set(self._labels)
+        if name in table and table[name] in installed:
             return table[name]
         low = name.lower()
         for label, pkg in table.items():
-            if label.lower() == low or low in label.lower() or label.lower() in low:
+            if pkg in installed and (label.lower() == low or low in label.lower() or label.lower() in low):
                 return pkg
         return ""
+
+    def installed_labels(self) -> str:
+        self._app_table()
+        return "、".join(sorted(set(self._labels.values())))
 
     def _current_app(self, obs: Observation) -> str:
         self._app_table()
@@ -316,13 +383,17 @@ class AutoGLMDecider:
         if hints:
             info["提示"] = "；".join(hints)
         screen_info = json.dumps(info, ensure_ascii=False)
-        text = f"{session.task}\n\n{screen_info}" if first else f"** Screen Info **\n\n{screen_info}"
+        task = session.task + skills.task_note(session.task)
+        text = f"{task}\n\n{screen_info}" if first else f"** Screen Info **\n\n{screen_info}"
 
         self.device.wait_frames_idle()
         jpeg = self.device.screenshot_jpeg(quality=85) or blank_frame(obs)
+        cued = False
         if focused is not None:
-            jpeg = input_ready_cue(jpeg, obs, focused)
-            # the trace keeps exactly what the model was shown
+            jpeg, cued = input_ready_cue(jpeg, obs, focused), True
+        elif info["current_app"] == "System Home":
+            jpeg, cued = desktop_cue(jpeg), True
+        if cued:  # the trace keeps exactly what the model was shown
             (session.run_dir / f"step-{len(session.steps) + 1:02d}-model.jpg").write_bytes(jpeg)
         user = {"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(jpeg).decode()}},
@@ -356,7 +427,7 @@ class AutoGLMDecider:
         if meta == "finish":
             d.update(action="done", text=a.get("message", ""))
         elif meta == "invalid":
-            d.update(action="invalid", text=a.get("error", ""))
+            d.update(action="invalid", text=f"无法解析模型输出的动作：{a.get('error', '')}")
         elif act == "Tap":
             d.update(action="tap", point=px(a["element"]))
             st["last_point"] = d["point"]
@@ -375,7 +446,14 @@ class AutoGLMDecider:
             d.update(action="double_tap", point=px(a["element"]))
         elif act == "Launch":
             name = a.get("app", "")
-            d.update(action="launch", text=name, package=self._resolve(name))
+            pkg = self._resolve(name)
+            if pkg:
+                d.update(action="launch", text=name, package=pkg)
+            else:
+                # E9: "发短信" made the model launch 微信, which is not installed; the raw launch error
+                # did not tell it so, and it ended up flailing on the agent display's desktop.
+                d.update(action="invalid",
+                         text=f"「{name}」没有安装在这台手机上。这台手机上有：{self.installed_labels()}")
         elif act == "Back":
             d.update(action="back")
         elif act == "Home":
