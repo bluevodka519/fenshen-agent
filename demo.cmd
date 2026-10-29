@@ -12,6 +12,10 @@ set PYTHONIOENCODING=utf-8
 if not defined ANDROID_SDK_ROOT goto missing
 if not defined FENSHEN_SCRCPY goto missing
 if not defined ZHIPU_API_KEY goto missing
+rem A fresh adb server owned by this window: one started from another tool (an IDE, an assistant's
+rem terminal) dies when that tool restarts, and takes the phone link and the agent display with it.
+"%ANDROID_SDK_ROOT%\platform-tools\adb.exe" kill-server >nul 2>&1
+"%ANDROID_SDK_ROOT%\platform-tools\adb.exe" start-server >nul 2>&1
 cd /d "%~dp0brain"
 python -m fenshen web --llm autoglm --demo %*
 if errorlevel 1 pause

@@ -13,7 +13,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Callable
 
-from .adb import Adb
+from .adb import Adb, AdbError
 from .agent import Agent, ElementDecider, Outcome, Session
 from .device import REPO, VirtualDisplayDevice
 from .disturbance import sample
@@ -21,6 +21,8 @@ from .llm import from_env
 from .notify import Notifier
 
 RUNS = REPO / "runs"
+CONNECTION_LOST = ("和手机的连接断了（数据线松动、电脑上的 adb 服务重启，或者有别的程序用了另一个版本的 adb），"
+                   "分身屏随之被系统收回，这个任务没法接着做了。重新下达任务就行，我会重新建屏。")
 
 
 def launcher_packages(adb: Adb) -> list[str]:
@@ -134,6 +136,8 @@ class Runner:
         self._tasks_started = 0
         self.agent: Agent | None = None
         self._mirror_proc: subprocess.Popen | None = None
+        self._mirror_display: int | None = None
+        self._mirror_lock = threading.Lock()
         self._monitor: DisturbanceMonitor | None = None
 
     def on_event(self, kind: str, data: dict) -> None:
@@ -188,8 +192,7 @@ class Runner:
 
     def start(self) -> "Runner":
         self.device.start()
-        if self.mirror:
-            self._mirror_proc = self._open_mirror()
+        self.ensure_mirror()
         if self.llm is None:
             from .autoglm import AutoGLMDecider
 
@@ -211,16 +214,24 @@ class Runner:
 
     def run(self, session: Session) -> Outcome:
         assert self.agent is not None, "call start() first"
+        if getattr(session, "prepared", False) and not self.device.alive():
+            # resuming (approve / "I handled it") a task whose agent display went away with the connection
+            outcome = self.agent._finish(session, "failed", CONNECTION_LOST)
+            self._notify_quietly(session, outcome)
+            return outcome
         if not getattr(session, "prepared", False):
-            if self._tasks_started:
+            if self._tasks_started or not self.device.alive():
                 # Every task starts on a fresh agent display, like a phone on its home screen. Reusing it
                 # left the previous task's app (and an open permission dialog) in front: an SMS task then
                 # spent 24 steps searching Contacts (2026-10-29). DESTROY_CONTENT_ON_REMOVAL cleans up.
-                self.device.close()
-                self.device.start()
-                if self._mirror_proc:  # the open window still points at the display that was just removed
-                    self._mirror_proc.terminate()
-                    self._mirror_proc = self._open_mirror()
+                # This also brings the helper back after the connection to the phone dropped.
+                try:
+                    self.device.close()
+                    self.device.start()
+                except (AdbError, OSError, RuntimeError) as e:
+                    outcome = self.agent._finish(session, "failed", f"连不上手机，任务没有开始（检查数据线和 USB 调试授权）：{e}")
+                    return outcome
+                self.ensure_mirror()  # the open window still points at the display that was just removed
             self._tasks_started += 1
             try:
                 baseline = session.verifier.prepare(self.device)
@@ -242,6 +253,10 @@ class Runner:
             mon = self._monitor = DisturbanceMonitor(self.adb, session.run_dir / "monitor.jsonl", self.device.display_id).start()
         try:
             outcome = self.agent.run(session)
+        except (ConnectionError, OSError, AdbError):
+            if self.device.alive():
+                raise
+            outcome = self.agent._finish(session, "failed", CONNECTION_LOST)
         finally:
             if mon:
                 self._monitor = None
@@ -256,8 +271,14 @@ class Runner:
                             total[k] = total.get(k, 0) + v
                 (session.run_dir / "disturbance.json").write_text(json.dumps(total, indent=2), encoding="utf-8")
                 self.on_event("disturbance", total)
-        self.notify_outcome(session, outcome)
+        self._notify_quietly(session, outcome)
         return outcome
+
+    def _notify_quietly(self, session: Session, outcome: Outcome) -> None:
+        try:
+            self.notify_outcome(session, outcome)
+        except (AdbError, OSError):  # the phone may be the thing that went away
+            pass
 
     def live_disturbance(self, session: Session) -> dict | None:
         """Disturbance tallies while the task runs: earlier segments of this task plus the current one."""
@@ -272,9 +293,21 @@ class Runner:
                 total.setdefault(k, v)
         return total
 
-    def _open_mirror(self) -> subprocess.Popen | None:
-        return start_mirror(self.adb, self.device.display_id, window=self.mirror_window,
-                            title=f"分身屏（手机里的隐藏虚拟屏 display {self.device.display_id}）")  # winlayout.AGENT_TITLE_PREFIX
+    def ensure_mirror(self) -> None:
+        """Opens the agent display window if it is missing or shows a display that is gone: after each
+        task's fresh display, and after the adb connection dropped (scrcpy quits with it). Safe to call
+        from a watchdog thread; does nothing without mirroring or while the helper is down."""
+        with self._mirror_lock:
+            if not self.mirror or not self.device.alive():
+                return
+            running = self._mirror_proc is not None and self._mirror_proc.poll() is None
+            if running and self._mirror_display == self.device.display_id:
+                return
+            if running:
+                self._mirror_proc.terminate()
+            self._mirror_display = self.device.display_id
+            self._mirror_proc = start_mirror(self.adb, self.device.display_id, window=self.mirror_window,
+                                             title=f"分身屏（手机里的隐藏虚拟屏 display {self.device.display_id}）")  # winlayout.AGENT_TITLE_PREFIX
 
     def close(self) -> None:
         if self._mirror_proc:

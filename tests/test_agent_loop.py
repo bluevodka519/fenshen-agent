@@ -145,8 +145,11 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(phone.actions, [])
 
     def test_patterns(self):
-        for label in ["Pay ¥25", "提交订单", "Log in", "验证码", "Place order"]:
+        for label in ["Pay ¥25", "提交订单", "Log in", "验证码", "Place order", "立即下单", "去支付", "立即购买"]:
             self.assertTrue(HANDOFF_ONLY.search(label), label)
+        # sales counts on a product card (Meituan, real phone): tapping "+" there is not paying
+        for label in ["70+回头客推荐 46人觉得味道赞 14人觉得分量足 近期400+人已下单", "1000+人付款", "已购买"]:
+            self.assertFalse(HANDOFF_ONLY.search(label), label)
         for label in ["Send SMS", "Delete", "Allow", "允许", "Only this time", "同意并继续"]:
             self.assertTrue(NEEDS_CONFIRM.search(label), label)
         for label in ["Don’t allow", "Don't allow", "不允许", "OK", "Cancel", "Start chat", "Send to (380) 000-1234 +13800001234"]:
@@ -216,6 +219,32 @@ class ChangedWhileThinkingTest(unittest.TestCase):
         before = Observation(1, 7, 720, 1600, "m", [], [Element(1, 1, "button", "搜索", (40, 110, 680, 190), 1, clickable=True)], raw={})
         dialog = Observation(2, 7, 720, 1600, "m", [], [Element(1, 2, "button", "领取红包", (0, 0, 720, 900), 1, clickable=True)], raw={})
         self.assertFalse(agent._point_still_valid(point, before, dialog))
+
+
+class ConnectionLostTest(unittest.TestCase):
+    def test_phone_going_away_is_reported_plainly_and_not_resumed(self):
+        # 2026-10-29: the adb server restarted mid-task; the helper died with it and "continue" then
+        # failed with a bare WinError 10054
+        from fenshen.runner import CONNECTION_LOST, Runner
+
+        phone = FakePhone()
+        state = {"alive": True}
+
+        def gone():
+            state["alive"] = False
+            raise ConnectionResetError(10054, "An existing connection was forcibly closed by the remote host")
+
+        phone.observe = gone
+        phone.alive = lambda: state["alive"]
+        runner = Runner.__new__(Runner)  # no adb: only the parts run() touches
+        runner.agent, session = make(phone, Script(("tap", 1, "")))
+        runner.device, runner.monitor, runner.notifier, runner._monitor = phone, False, None, None
+        session.prepared = True
+
+        out = runner.run(session)
+        self.assertEqual((out.status, out.message), ("failed", CONNECTION_LOST))
+        out = runner.run(session)  # "continue" on the dead display
+        self.assertEqual((out.status, out.message), ("failed", CONNECTION_LOST))
 
 
 class StopTest(unittest.TestCase):

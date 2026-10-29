@@ -73,7 +73,9 @@ SYSTEM_PROMPT = """你是"分身"：在用户手机的一块隐藏屏幕上，�
 
 # Must be done by the user themself: the agent never performs these, even with approval.
 HANDOFF_ONLY = re.compile(
-    r"支付|付款|购买|下单|提交订单|确认订单|登录|登入|注册|密码|验证码|(?<!不)开通|(?<!不)续费|免密"
+    # "近期400+人已下单", "1000人付款", "已购买": sales counts and order states on product cards, not buttons
+    # (a Meituan run was stopped tapping "+" on such a card)
+    r"(?<![已人])(?:支付|付款|购买|下单)|提交订单|确认订单|登录|登入|注册|密码|验证码|(?<!不)开通|(?<!不)续费|免密"
     r"|\bpay\b|payment|purchase|\bbuy\b|place order|checkout|sign in|log in|login|password|verification code|\botp\b",
     re.I,
 )

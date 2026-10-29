@@ -269,6 +269,37 @@ def _minimize_console() -> None:
             ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
 
 
+class _DemoMirrors(threading.Thread):
+    """Keeps both phone windows open during --demo. scrcpy quits when the adb connection drops (a loose
+    cable, an adb server restart); once the phone is back, the windows come back by themselves."""
+
+    def __init__(self, runner: Runner, user_window: tuple[int, int, int]):
+        super().__init__(daemon=True)
+        self.runner, self.user_window = runner, user_window
+        self.user: subprocess.Popen | None = None
+        self._stop = threading.Event()
+
+    def open_user(self) -> bool:
+        self.user = start_mirror(self.runner.adb, 0, title=winlayout.USER_TITLE, window=self.user_window,
+                                 ports="27210:27219")
+        return self.user is not None
+
+    def run(self) -> None:
+        while not self._stop.wait(5):
+            try:
+                if self.user is not None and self.user.poll() is not None:
+                    if self.runner.adb.run("get-state", check=False).strip() == "device":
+                        self.open_user()
+                self.runner.ensure_mirror()  # no-op until the helper is back (the next task rebuilds it)
+            except Exception:  # cosmetic: never take the dashboard down
+                pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self.user:
+            self.user.terminate()
+
+
 def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 8765, demo: bool = False) -> None:
     dash_ref: dict = {}
     layout = demo_layout() if demo else None
@@ -285,13 +316,13 @@ def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 87
     url = f"http://127.0.0.1:{port}" + ("/?demo" if demo else "")
     print(f"Fenshen dashboard: {url}  (agent display {runner.device.display_id}, model {runner.model_name})",
           flush=True)
-    user_mirror = browser = None
+    mirrors = _DemoMirrors(runner, layout["user"]) if layout else None
+    browser = None
     if layout:
         time.sleep(2)  # both scrcpy instances push the same server file to the phone: don't overlap
-        user_mirror = start_mirror(runner.adb, 0, title=winlayout.USER_TITLE, window=layout["user"],
-                                   ports="27210:27219")
-        if user_mirror is None or runner._mirror_proc is None:
+        if not mirrors.open_user() or runner._mirror_proc is None:
             print("scrcpy not found: set FENSHEN_SCRCPY to scrcpy.exe to get the two phone windows", flush=True)
+        mirrors.start()
         winlayout.close_stale_browser()
         browser = _open_demo_browser(url, layout["browser"])
         winlayout.DemoLayout(_work_area()).start()
@@ -303,7 +334,8 @@ def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 87
         pass
     finally:
         server.server_close()
-        for proc in (user_mirror, browser):
-            if proc:
-                proc.terminate()
+        if mirrors:
+            mirrors.stop()
+        if browser:
+            browser.terminate()
         runner.close()

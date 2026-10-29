@@ -111,6 +111,11 @@ class VirtualDisplayDevice:
             raise RuntimeError(f"helper reports display {info['display_id']}, expected {self.display_id}")
         return self
 
+    def alive(self) -> bool:
+        """The helper still runs. Its `adb shell` session ends with it, and also when the adb server or
+        the USB link goes away, which takes the helper and the agent display with it."""
+        return self._proc is not None and self._proc.poll() is None
+
     def _pump(self, lines: "queue.Queue[str]") -> None:
         assert self._proc is not None and self._proc.stdout is not None
         for raw in self._proc.stdout:
