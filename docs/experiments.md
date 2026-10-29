@@ -378,10 +378,6 @@ run `20261028-105400` 的第 2–7 步是浪费的：时钟先变黑，然后从
    - 虚拟屏的合成：SurfaceFlinger 用同一个线程合成两块屏，agent 屏每一帧都要 GPU 合成到 ImageReader，再读回内存；模拟器的 GPU 是宿主机转发的，这一步可能特别贵；
    - 每步的界面树快照、截图和 JPEG 编码；
    - 时钟 App 本身在 agent 屏上的绘制。
-4. 下一步（E8b）：
-   - 把 agent 屏的刷新率限到 10–15 fps（Android 14 的 `VirtualDisplayConfig.setRequestedRefreshRate`）。agent 不需要 60 fps，这是最直接的减负。
-   - 降低 agent 屏分辨率。
-   - 用"agent 屏只放动画、不做任何 agent 动作"拆分各部分的代价。
-   - 有真机后重测：模拟器的绝对数字不能代表手机。
+4. 决定：卡顿先作为已知局限记录，不再继续测量（时间留给交付物）。已经做好的减负手段是 agent 屏限帧选项（helper `--fps`，即 Android 14 的 `VirtualDisplayConfig.setRequestedRefreshRate`）。抽查：在 agent 屏上滑动时钟时，不限帧每秒 13.4 帧（模拟器上本来就合成不到 60 帧，说明虚拟屏合成很贵），限 15 fps 后每秒 5.0 帧。它能把用户 App 的帧还回来多少**没有测**，所以默认不开。真机上应先测这一项。
 
 ---

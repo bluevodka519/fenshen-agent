@@ -84,12 +84,25 @@ def _device_now(adb: Adb) -> dt.datetime:
 
 def next_alarm_clock(adb: Adb) -> dt.datetime | None:
     """AlarmManager.getNextAlarmClock() as reported by dumpsys: the alarm the status bar icon shows."""
-    dump = adb.shell("dumpsys", "alarm")
-    m = re.search(r"Next alarm clock information:\s*\n(.*?)\n\s*\n", dump, re.S)
-    if not m or not m.group(1).strip():
+    return _parse_next_alarm(adb.shell("dumpsys", "alarm"), adb)
+
+
+def _parse_next_alarm(dump: str, adb: Adb | None = None) -> dt.datetime | None:
+    # Only the lines right under the header, up to the first blank line. An empty block means no
+    # alarm clock is set; reading further picked up another app's pending alarm (a phantom 17:00).
+    lines = dump.splitlines()
+    start = next((i for i, l in enumerate(lines) if "Next alarm clock information:" in l), None)
+    if start is None:
         return None
-    block = m.group(1)
-    tz = _device_now(adb).tzinfo
+    body = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            break
+        body.append(line)
+    if not body:
+        return None
+    block = "\n".join(body)
+    tz = _device_now(adb).tzinfo if adb is not None else dt.timezone.utc
     ms = re.search(r"time[=:](\d{12,})", block)
     if ms:
         return dt.datetime.fromtimestamp(int(ms.group(1)) / 1000, tz)
@@ -114,9 +127,23 @@ def read_alarms(device) -> Counter | None:
     from .helper_client import ConflictError  # local import: keep verify importable without a device
 
     try:
-        device.launch(CLOCK_PKG)
+        open_clock(device)
     except ConflictError:
         return None
+    rows = scan_alarm_rows(device)
+    device.back()
+    # Leave the display clean: the agent's first screenshot must not catch Clock mid-exit
+    # (bench 20261028-1110: the model tapped a "+" that was already gone and then saw a bare launcher).
+    deadline = time.time() + 5
+    while time.time() < deadline and device.observe().package == CLOCK_PKG:
+        time.sleep(0.2)
+    device.wait_idle(400, 3000)
+    return Counter((label, "currently enabled" in label) for label in rows.values())
+
+
+def open_clock(device) -> None:
+    """Launch Clock on the agent display and wait until its alarm page is really there."""
+    device.launch(CLOCK_PKG)
     # A cold start (first launch after boot) takes ~4 s before any window exists, and "idle" is
     # already true while nothing is drawn: wait for the Alarms tab itself, or the list reads as empty.
     deadline = time.time() + 12
@@ -127,17 +154,8 @@ def read_alarms(device) -> Counter | None:
             break
         time.sleep(0.3)
     else:
-        raise RuntimeError("时钟启动后 12 秒内没有出现闹钟页，读不到基线")
+        raise RuntimeError("时钟启动后 12 秒内没有出现闹钟页")
     device.wait_idle(800, 4000)  # right after saving, Clock scrolls to the new alarm and shows a snackbar
-    rows = scan_alarm_rows(device)
-    device.back()
-    # Leave the display clean: the agent's first screenshot must not catch Clock mid-exit
-    # (bench 20261028-1110: the model tapped a "+" that was already gone and then saw a bare launcher).
-    deadline = time.time() + 5
-    while time.time() < deadline and device.observe().package == CLOCK_PKG:
-        time.sleep(0.2)
-    device.wait_idle(400, 3000)
-    return Counter((label, "currently enabled" in label) for label in rows.values())
 
 
 def open_alarms_tab(device) -> None:

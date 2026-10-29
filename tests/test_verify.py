@@ -2,7 +2,7 @@
 
 import unittest
 
-from fenshen.verify import (ContactVerifier, SmsVerifier, AllOf, content_query, parse_contact, parse_sms,
+from fenshen.verify import (_parse_next_alarm, ContactVerifier, SmsVerifier, AllOf, content_query, parse_contact, parse_sms,
                             parse_time, verifier_for, AlarmVerifier, ScreenEvidenceVerifier)
 
 
@@ -25,6 +25,20 @@ class ParseTimeTest(unittest.TestCase):
 
     def test_no_time(self):
         self.assertIsNone(parse_time("帮我删除所有闹钟"))
+
+
+class NextAlarmTest(unittest.TestCase):
+    def test_empty_block_means_no_alarm(self):
+        # The pending-alarm list below has other apps' timestamps; they are not the next alarm clock.
+        dump = ("  Next alarm clock information: \n  \n  47 pending alarms: \n"
+                "    RTC_WAKEUP #1: Alarm{1 type 0 origWhen 1793163600000 com.google.android.gms}\n"
+                "      type=RTC_WAKEUP origWhen=2026-10-29 17:00:00.000 window=0\n")
+        self.assertIsNone(_parse_next_alarm(dump))
+
+    def test_block_with_time(self):
+        dump = ("  Next alarm clock information: \n    user:0 pendingSend:false time:1793142900000 = 2026-10-29 07:15:00\n"
+                "  \n  3 pending alarms: \n      type=RTC_WAKEUP origWhen=2026-10-29 17:00:00.000\n")
+        self.assertEqual(_parse_next_alarm(dump).timestamp(), 1793142900)
 
 
 class ParseContactSmsTest(unittest.TestCase):

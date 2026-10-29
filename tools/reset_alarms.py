@@ -13,13 +13,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "brain"))
 
 from fenshen.device import VirtualDisplayDevice  # noqa: E402
-from fenshen.verify import CLOCK_PKG, next_alarm_clock, scan_alarm_rows  # noqa: E402
+from fenshen.verify import next_alarm_clock, open_clock, scan_alarm_rows  # noqa: E402
 
 
 def main() -> int:
     with VirtualDisplayDevice() as dev:
-        dev.launch(CLOCK_PKG)
-        dev.wait_idle(600, 6000)
+        open_clock(dev)
 
         def switch_off(obs):
             for e in obs.elements:
