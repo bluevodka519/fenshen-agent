@@ -119,7 +119,7 @@ class ElementDecider:
         parts = [f"任务：{session.task}"]
         if self.apps and Agent._is_home(obs):  # only needed to pick what to launch
             parts.append("可用的 App 包名：" + ", ".join(self.apps))
-        for hint in skills.relevant(session.task, obs.package):
+        for hint in skills.relevant(session.task, obs.package, installed=set(self.apps) or None):
             parts.append(hint)
         if session.history:
             parts.append("已执行的步骤：\n" + "\n".join(session.history[-8:]))

@@ -250,6 +250,12 @@ class AlarmVerifier:
 
     def prepare(self, device) -> str:
         self.before_next = next_alarm_clock(device.adb)
+        if "package:" not in device.adb.shell("pm", "path", CLOCK_PKG, check=False):
+            # Vendor phones ship their own clock app; its list UI is not something we know how to read.
+            # The system-level check (AlarmManager's next alarm clock) works on any Android phone.
+            self.before, self.blocked_by, self.inventory = None, None, False
+            return "基线：这台手机没有 Google 时钟，只核对系统的下一个闹钟，不对比闹钟清单"
+        self.inventory = True
         self.before = read_alarms(device)
         self.blocked_by = CLOCK_PKG if self.before is None else None
         if self.before is None:
@@ -266,7 +272,8 @@ class AlarmVerifier:
         system_note = f"系统下一个闹钟：{nxt:%Y-%m-%d %H:%M}"
 
         if self.before is None:
-            return Verdict(True, "dumpsys alarm", system_note + "（没有基线，未检查副作用）")
+            why = "这台手机的时钟不是 Google 时钟" if not getattr(self, "inventory", True) else "没有基线"
+            return Verdict(True, "dumpsys alarm", system_note + f"（{why}，未检查副作用）")
         after = read_alarms(device)
         if after is None:
             return Verdict(True, "dumpsys alarm", system_note + "（时钟在用户屏上，未检查副作用）")

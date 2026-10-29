@@ -7,6 +7,7 @@ Binds to 127.0.0.1: the dashboard can start tasks on the phone, so it is not exp
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import asdict
@@ -19,6 +20,14 @@ from .agent import Session
 from .runner import RUNS, Runner
 
 STATIC = Path(__file__).with_name("static")
+
+
+class _Server(ThreadingHTTPServer):
+    # http.server sets SO_REUSEADDR, which on Windows lets a second dashboard bind the same port
+    # silently; requests then land on whichever one, e.g. a stale one whose phone connection is gone
+    # (seen 2026-10-29). Fail loudly instead.
+    allow_reuse_address = os.name != "nt"
+    daemon_threads = True
 
 
 class Dashboard:
@@ -208,8 +217,11 @@ def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 87
                     on_event=lambda kind, data: dash_ref["d"].on_event(kind, data))
     dash = Dashboard(runner)
     dash_ref["d"] = dash
+    try:  # bind before touching the phone: a second dashboard must not take over the device
+        server = _Server(("127.0.0.1", port), _make_handler(dash))
+    except OSError as e:
+        raise SystemExit(f"port {port} is in use (another dashboard still running?): {e}")
     runner.start()
-    server = ThreadingHTTPServer(("127.0.0.1", port), _make_handler(dash))
     print(f"Fenshen dashboard: http://127.0.0.1:{port}  (agent display {runner.device.display_id}, model {runner.model_name})",
           flush=True)
     try:

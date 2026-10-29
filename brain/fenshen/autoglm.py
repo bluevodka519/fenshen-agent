@@ -300,7 +300,9 @@ class AutoGLMDecider:
         focused = next((e for e in obs.elements if e.editable and e.focused), None)
         hints = [n for n in notes] + ([feedback] if feedback else [])
         sent: list[str] = st.setdefault("skills_sent", [])
-        new = [tip for tip in skills.relevant(session.task, obs.package, visual=True) if tip not in sent]
+        self._app_table()
+        new = [tip for tip in skills.relevant(session.task, obs.package, visual=True, installed=set(self._labels))
+               if tip not in sent]
         if new:  # once; it stays in the conversation
             sent.extend(new)
             info["App 经验"] = "\n".join(new)

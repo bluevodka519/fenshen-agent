@@ -26,6 +26,17 @@ HOUR = Element(2, 21, "edit", "Hour", (80, 684, 272, 844), 1, text="09", clickab
 MINUTE = Element(5, 25, "edit", "Minute", (320, 684, 512, 844), 1, text="00", clickable=True, editable=True)
 
 
+class SkillTest(unittest.TestCase):
+    def test_tips_only_for_installed_apps(self):
+        from fenshen import skills
+        google = {"com.google.android.deskclock"}
+        self.assertTrue(skills.relevant("帮我定一个早上7点的闹钟", "", True, installed=google))
+        # a vendor phone (e.g. com.android.deskclock): the Google Clock tips would mislead
+        self.assertFalse(skills.relevant("帮我定一个早上7点的闹钟", "", True, installed={"com.android.deskclock"}))
+        # on screen anyway: still relevant
+        self.assertTrue(skills.relevant("x", "com.google.android.deskclock", True, installed=set()))
+
+
 class ParseTest(unittest.TestCase):
     def test_split(self):
         self.assertEqual(split_response('<think>点加号</think><answer>do(action="Tap", element=[842,775])</answer>'),

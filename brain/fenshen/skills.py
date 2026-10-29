@@ -98,8 +98,12 @@ SKILLS = [
 ]
 
 
-def relevant(task: str, package: str, visual: bool = False) -> list[str]:
-    hits = [s for s in SKILLS if s.package == package or re.search(s.keywords, task, re.I)]
+def relevant(task: str, package: str, visual: bool = False, installed: set[str] | None = None) -> list[str]:
+    """Skills for the app on screen, or for apps the task talks about. `installed` (launcher packages)
+    drops skills for apps this phone does not have: the Google Clock tips would mislead a model
+    driving a vendor clock app."""
+    hits = [s for s in SKILLS if s.package == package
+            or (re.search(s.keywords, task, re.I) and (installed is None or s.package in installed))]
     out = []
     for s in hits:
         text = (s.visual or s.text) if visual else s.text
