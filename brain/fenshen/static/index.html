@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分身 · Agent 面板</title>
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #ffffff; --ink: #16181d; --muted: #6b7280; --line: #e3e5ea;
+    --accent: #2563eb; --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --chip: #eef1f6;
+    --warn-bg: #fff7e6; --ok-bg: #ecfdf3; --bad-bg: #fef2f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1115; --panel: #171a21; --ink: #e8eaf0; --muted: #9aa3b2; --line: #2a2f3a;
+      --accent: #60a5fa; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --chip: #222733;
+      --warn-bg: #2a2212; --ok-bg: #11251a; --bad-bg: #2a1515;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin: 0; font-size: 17px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: minmax(260px, 380px) 1fr; gap: 20px; padding: 20px; max-width: 1280px; margin: 0 auto; }
+  @media (max-width: 820px) {
+    main { grid-template-columns: 1fr; padding: 16px; }
+    /* stacked: a pinned phone would cover the task form while scrolling */
+    .phone { position: static !important; }
+    .phone .screen { max-width: 280px; margin: 0 auto; }
+  }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .phone { position: sticky; top: 16px; align-self: start; }
+  .phone h2, .card h2 { margin: 0 0 10px; font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  .screen { width: 100%; aspect-ratio: 9 / 16; background: #000; border-radius: 18px; overflow: hidden; border: 6px solid #22252c; }
+  .screen img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .phone .note { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  form { display: flex; gap: 8px; }
+  input[type=text] { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); font-size: 14px; }
+  button { padding: 9px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); color: var(--ink); cursor: pointer; font-size: 14px; }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  button:disabled { opacity: .5; cursor: default; }
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+  .pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--chip); }
+  .pill.running { color: var(--accent); } .pill.done { color: var(--ok); background: var(--ok-bg); }
+  .pill.needs_user, .pill.waiting { color: var(--warn); background: var(--warn-bg); } .pill.failed, .pill.aborted { color: var(--bad); background: var(--bad-bg); }
+  .kv { color: var(--muted); font-size: 12px; }
+  .stack { display: grid; gap: 16px; }
+  .handoff { border-color: var(--warn); background: var(--warn-bg); }
+  .handoff p { margin: 0 0 10px; }
+  .handoff p.muted { color: var(--muted); font-size: 13px; }
+  .handoff .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .result.done { border-color: var(--ok); background: var(--ok-bg); }
+  .result.failed { border-color: var(--bad); background: var(--bad-bg); }
+  .steps { display: grid; gap: 10px; }
+  .step { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+  .step img { width: 64px; border-radius: 6px; border: 1px solid var(--line); background: #000; }
+  .step .head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .step .n { font-weight: 700; }
+  .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+  .tag.executed, .tag.approved { color: var(--accent); } .tag.done { color: var(--ok); } .tag.invalid, .tag.error { color: var(--bad); }
+  .tag.guarded, .tag.ask_user, .tag.rejected_done { color: var(--warn); }
+  .why { margin: 4px 0 0; }
+  .detail { margin: 2px 0 0; color: var(--muted); font-size: 12px; word-break: break-word; }
+  .empty { color: var(--muted); }
+  code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>分身 · Agent 面板</h1>
+  <span class="meta" id="meta">连接中…</span>
+</header>
+<main>
+  <section class="card phone">
+    <h2>AGENT 屏（隐藏虚拟屏的实时画面）</h2>
+    <div class="screen"><img id="screen" alt="agent 屏实时画面"></div>
+    <div class="note">这块屏不在手机主屏上显示；画面直接来自 helper 持有的屏幕缓冲。</div>
+  </section>
+
+  <section class="stack">
+    <div class="card">
+      <h2>任务</h2>
+      <form id="taskForm">
+        <input type="text" id="task" placeholder="例如：帮我定一个早上7点15的闹钟" autocomplete="off">
+        <button class="primary" id="runBtn" type="submit">开始</button>
+        <button id="abortBtn" type="button" disabled>中止</button>
+      </form>
+      <div class="status">
+        <span class="pill" id="statusPill">空闲</span>
+        <span class="kv" id="statusText"></span>
+      </div>
+      <div class="kv" id="verifier"></div>
+    </div>
+
+    <div class="card handoff" id="waiting" hidden>
+      <h2>在后台等你</h2>
+      <p id="waitingText"></p>
+      <div class="kv">不用点任何按钮，你退出那个 App 后会自动继续。</div>
+    </div>
+
+    <div class="card handoff" id="handoff" hidden>
+      <h2>需要你处理</h2>
+      <p id="handoffText"></p>
+      <p id="takeoverText" class="muted" hidden></p>
+      <div class="row">
+        <button class="primary" id="approveBtn" hidden>允许这一步</button>
+        <button id="resumeBtn">我处理好了，继续</button>
+        <button id="stopBtn">结束任务</button>
+      </div>
+    </div>
+
+    <div class="card result" id="result" hidden>
+      <h2 id="resultTitle">结果</h2>
+      <div id="resultText"></div>
+    </div>
+
+    <div class="card">
+      <h2>每一步（最新在上）</h2>
+      <div class="steps" id="steps"><div class="empty">还没有步骤。</div></div>
+    </div>
+  </section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const STATUS_LABEL = { idle: "空闲", running: "执行中", waiting: "等你用完", done: "已完成", needs_user: "等你处理", failed: "失败", aborted: "已中止" };
+const STEP_LABEL = { executed: "已执行", approved: "你允许后执行", invalid: "无效", guarded: "已拦截", ask_user: "请求用户", done: "完成", rejected_done: "完成被驳回", error: "执行出错" };
+let lastState = null;
+let renderedSteps = -1;
+let renderedRun = "";
+
+async function post(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) alert(j.error || r.statusText);
+  return j;
+}
+
+$("taskForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const task = $("task").value.trim();
+  if (task) await post("/api/run", { task });
+  poll();
+});
+$("abortBtn").addEventListener("click", () => post("/api/abort"));
+$("resumeBtn").addEventListener("click", async () => { await post("/api/resume", { note: "用户已处理" }); poll(); });
+$("approveBtn").addEventListener("click", async () => { await post("/api/approve"); poll(); });
+$("stopBtn").addEventListener("click", async () => { await post("/api/abort"); poll(); });
+
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function describe(d) {
+  if (!d || !d.action) return "";
+  const t = d.target ? ` [${d.target}]` : "";
+  if (d.action === "fill") return `fill${t} “${esc(d.text)}”`;
+  if (d.action === "launch") return `launch ${esc(d.package)}`;
+  if (d.action === "scroll") return `scroll${t} ${esc(d.direction)}`;
+  return `${d.action}${t}`;
+}
+
+function renderSteps(st) {
+  if (st.run_dir === renderedRun && st.steps.length === renderedSteps) return;
+  renderedRun = st.run_dir; renderedSteps = st.steps.length;
+  if (!st.steps.length) { $("steps").innerHTML = '<div class="empty">还没有步骤。</div>'; return; }
+  $("steps").innerHTML = st.steps.slice().reverse().map((s) => {
+    const d = s.decision || {};
+    const img = s.screenshot ? `<img src="/runs/${encodeURIComponent(st.run_dir)}/${encodeURIComponent(s.screenshot)}" alt="第 ${s.index} 步执行前">` : "<div></div>";
+    const changed = s.changed === true ? "屏幕已变化" : s.changed === false ? "屏幕无变化" : "";
+    const tok = s.prompt_tokens ? ` · ${s.prompt_tokens}+${s.output_tokens} tok` : "";
+    const extra = [s.executed && `执行方式：${esc(s.executed)}`, changed, d.action && s.llm_ms && `模型 ${s.llm_ms} ms${tok}`].filter(Boolean).join(" · ");
+    return `<div class="step">${img}<div>
+      <div class="head"><span class="n">#${s.index}</span><span class="tag ${s.status}">${STEP_LABEL[s.status] || s.status}</span><code>${describe(d)}</code><span class="kv">${esc(s.package)}</span></div>
+      ${d.thought ? `<p class="why">${esc(d.thought)}</p>` : ""}
+      ${s.detail ? `<p class="detail">${esc(s.detail)}</p>` : ""}
+      ${extra ? `<p class="detail">${extra}</p>` : ""}
+    </div></div>`;
+  }).join("");
+}
+
+function render(st) {
+  lastState = st;
+  $("meta").textContent = `设备 ${st.serial} · agent 屏 display ${st.display_id} · 模型 ${st.model}`;
+  $("statusPill").textContent = STATUS_LABEL[st.status] || st.status;
+  $("statusPill").className = `pill ${st.status}`;
+  const running = st.status === "running" || st.status === "waiting";
+  $("waiting").hidden = st.status !== "waiting";
+  if (st.waiting) $("waitingText").textContent = st.waiting.message;
+  $("runBtn").disabled = running;
+  $("abortBtn").disabled = !running;
+  $("statusText").textContent = st.task ? `任务：${st.task}` + (running && st.elapsed_s ? ` · ${st.elapsed_s}s` : "") : "";
+  $("verifier").textContent = st.verifier ? `完成校验：${st.verifier}` : "";
+
+  const o = st.outcome;
+  $("handoff").hidden = !(o && o.status === "needs_user" && !running);
+  if (o && o.status === "needs_user") $("handoffText").textContent = o.message;
+  const confirmable = !!st.pending;
+  $("approveBtn").hidden = !confirmable;
+  $("approveBtn").textContent = confirmable ? `允许：点「${st.pending.label}」` : "允许这一步";
+  $("resumeBtn").textContent = confirmable ? "不允许这一步" : "我处理好了，继续";
+  $("takeoverText").hidden = !(confirmable && st.pending.app);
+  if (confirmable && st.pending.app) $("takeoverText").textContent = `也可以在手机上打开「${st.pending.app}」：分身做好的部分会出现在你的屏幕上，最后一步你自己点，分身会自动发现任务完成了。`;
+
+  const showResult = o && !running && o.status !== "needs_user";
+  $("result").hidden = !showResult;
+  if (showResult) {
+    $("result").className = `card result ${o.status}`;
+    $("resultTitle").textContent = o.status === "done" ? "办好了（已独立校验）" : (STATUS_LABEL[o.status] || o.status);
+    const dist = st.disturbance;
+    const distText = dist ? `打扰监视：采样 ${dist.samples} 次，焦点被 agent 拿走 ${dist.top_focus_on_agent_display} 次，输入法到 agent 屏 ${dist.ime_on_agent_display} 次` : "";
+    $("resultText").innerHTML = `<p>${esc(o.message)}</p><p class="kv">共 ${o.steps} 步 · 记录目录 runs/${esc(st.run_dir)}</p>${distText ? `<p class="kv">${esc(distText)}</p>` : ""}`;
+  }
+  renderSteps(st);
+}
+
+async function poll() {
+  try { render(await (await fetch("/api/state")).json()); } catch (e) { $("meta").textContent = "连接断开"; }
+}
+
+// Live agent screen: fetch frames back to back (~4 fps), never stacking requests.
+async function frames() {
+  try {
+    const r = await fetch("/api/screen.jpg", { cache: "no-store" });
+    if (r.status === 200) {
+      const url = URL.createObjectURL(await r.blob());
+      const img = $("screen");
+      const old = img.src;
+      img.src = url;
+      if (old.startsWith("blob:")) URL.revokeObjectURL(old);
+    }
+  } catch (e) {}
+  setTimeout(frames, 250);
+}
+
+poll(); setInterval(poll, 1000); frames();
+</script>
+</body>
+</html>

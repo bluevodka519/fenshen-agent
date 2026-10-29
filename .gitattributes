@@ -1,0 +1,5 @@
+* text=auto
+# bash refuses scripts with CRLF line endings
+*.sh text eol=lf
+*.png binary
+*.jpg binary

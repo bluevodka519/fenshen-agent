@@ -1,0 +1,108 @@
+"""Short per-app know-how ("skills"), added to the prompt only when relevant.
+
+These are hints about how an app's UI works, not click scripts: the model still decides every
+step from the live screen, and the guard / verifier apply as usual. WhalePhone does the same
+for its featured apps (WeChat, Meituan, Amap).
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import Callable
+
+
+@dataclass(frozen=True)
+class Skill:
+    package: str
+    keywords: str  # regex matched against the task
+    text: str  # for text models: refers to the element list and its actions (fill, check "00"...)
+    visual: str = ""  # for screenshot models: what the screen looks like, in Tap/Type terms
+    # The task's own parameters in the app's format (e.g. 24h -> the picker's 12h + AM/PM). This is
+    # the actual target, not an example, so there is nothing wrong to copy.
+    params: Callable[[str], str] | None = None
+
+
+def _alarm_params(task: str) -> str:
+    from .verify import parse_time  # same parser the verifier checks against
+
+    t = parse_time(task)
+    if t is None:
+        return ""
+    hour, minute = t
+    h12, ampm = hour % 12 or 12, "AM" if hour < 12 else "PM"
+    return (f"这次任务的目标时间，换成这个时钟的格式是 {h12}:{minute:02d} {ampm}："
+            f"小时框填 {h12}，分钟框填 {minute:02d}，并确认选中的是 {ampm}（打开时默认选中的不一定对）。")
+
+
+SKILLS = [
+    Skill(
+        package="com.google.android.deskclock",
+        keywords=r"闹钟|alarm|叫我起床",
+        text=(
+            "时钟 App（com.google.android.deskclock）新建闹钟的界面要点：\n"
+            "- 在底部 Alarms 页点 \"Add alarm\"，会弹出 \"Select time\" 时间选择框（弹出需要一点时间）。\n"
+            "- 最简单的做法：点 \"Switch to text input mode for the time input.\" 切到文本输入，"
+            "然后对 \"Hour\" 输入框 fill 任务要求的小时（12 小时制）；分钟字段在 \"Minute\" 文字上方，"
+            "没选中时显示为 check \"00\"，直接对它 fill 任务要求的分钟即可。小时和分钟一定要用任务里的数字。\n"
+            "- 上午选 AM、下午选 PM；已经是 checked 的不用再点。\n"
+            "- 小时、分钟、AM/PM 三项都对了，下一步就是点 \"OK\"，不要再改任何一项。\n"
+            "- 点 \"OK\" 保存。保存后列表里出现这个时间的闹钟，开关自动打开，这时任务就完成了，用 done。\n"
+            "- 新建时不要点已有闹钟的开关，也不要重复点 Add alarm。\n"
+            "- 删除闹钟：点那个闹钟的时间（如 \"7:30 AM\"）展开它，再点出现的 \"Delete\"（系统会请用户确认）。"
+            "关掉开关只是停用，不等于删除。删除多个就一个一个来。"
+        ),
+        # Written from AutoGLM's failure modes in runs 20261028-1056..1100 (no example times on purpose:
+        # the 7B model copied example numbers from the first version of the text skill).
+        visual=(
+            "时钟 App 新建闹钟要点：Alarms 页右下角的 + 新建闹钟，会弹出 Select time。"
+            "小时和分钟是两个数字输入框，不是滚轮，滑动它们没有任何作用：先点一下要改的框让它高亮，再用 Type 输入数字；"
+            "Type 只会写进当前高亮的那个框，所以改另一个框之前要先点它。"
+            "它是 12 小时制，小时框只能填 1 到 12；下午和晚上的时间，小时框填 12 小时制的钟点，再点 PM（上午点 AM）。"
+            "小时框的数字加上选中的 PM，就是下午的那个钟点，不需要也不能填 13 到 23。"
+            "点 OK 之前看一眼 AM/PM 高亮的是哪个：打开时默认选中的不一定对。"
+            "三项都对了就点 OK；保存后列表里出现这个闹钟且开关是开的，任务就完成了。不要动已有闹钟的开关。"
+        ),
+        params=_alarm_params,
+    ),
+    Skill(
+        package="com.google.android.contacts",
+        keywords=r"联系人|通讯录|contact",
+        text=(
+            "联系人 App（com.google.android.contacts）新建联系人：点 \"Create contact\"（右下角 +）；"
+            "如果问保存到哪里，选设备（Device）；中文姓名整个 fill 进 \"First name\"，号码 fill 进 \"Phone\"；"
+            "填完点 \"Save\"。保存后会显示这个联系人的详情页，任务的这一部分就完成了。"
+        ),
+        visual=(
+            "联系人 App 新建联系人：点右下角的 +（Create contact）；如果问保存到哪个账号，选设备（Device）。"
+            "中文姓名整个填进 First name（点一下再 Type），号码填进 Phone；填完点右上角 Save。"
+            "保存后出现这个联系人的详情页，这一步就完成了，不要重复新建。"
+        ),
+    ),
+    Skill(
+        package="com.google.android.apps.messaging",
+        keywords=r"短信|信息|消息|sms",
+        text=(
+            "短信 App（com.google.android.apps.messaging）发短信：首页点 \"Start chat\"；"
+            "在 To 输入框 fill 联系人名字或号码，然后点下面列表里对应的联系人；"
+            "进入对话后对底部输入框 fill 短信内容，再点发送按钮（Send SMS）。发送前系统会请用户确认。"
+            "如果弹出聊天功能、RCS 之类的推广，点 \"Not now\" / \"No thanks\" 跳过。"
+        ),
+        visual=(
+            "短信 App 发短信：首页右下角点 Start chat 新建对话；在顶部 To 输入框里输入联系人名字或号码，"
+            "再点下面列表里出现的那个联系人；进入对话后点底部的输入框（Text message）再 Type 短信内容，"
+            "最后点右边的发送按钮。发送前系统会请用户确认，这是正常的。"
+            "如果弹出聊天功能、RCS 一类的推广，点 Not now / No thanks 跳过，不要开启任何功能。"
+        ),
+    ),
+]
+
+
+def relevant(task: str, package: str, visual: bool = False) -> list[str]:
+    hits = [s for s in SKILLS if s.package == package or re.search(s.keywords, task, re.I)]
+    out = []
+    for s in hits:
+        text = (s.visual or s.text) if visual else s.text
+        extra = s.params(task) if s.params else ""
+        out.append(f"{text}\n{extra}" if extra else text)
+    return out

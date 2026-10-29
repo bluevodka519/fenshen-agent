@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fenshen"
+version = "0.1.0"
+description = "A phone GUI agent that works on a hidden virtual display of the user's own phone, without taking their focus or keyboard"
+readme = "README.md"
+requires-python = ">=3.10"
+# The brain uses only the standard library; adb, an Android 14+ device and (for the helper build) the Android SDK are external.
+dependencies = []
+
+[project.optional-dependencies]
+# Draws the input-ready cue on screenshots sent to AutoGLM-Phone and sends a black frame for an empty display (E6).
+vision = ["pillow>=10"]
+
+[project.scripts]
+fenshen = "fenshen.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "brain" }
+packages = ["fenshen"]
+
+[tool.setuptools.package-data]
+fenshen = ["static/*.html"]

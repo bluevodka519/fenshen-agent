@@ -1,0 +1,15 @@
+# build outputs
+helper/build/
+build/
+dist/
+*.egg-info/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# local secrets / runtime traces (runs/ holds screenshots of the agent display and full model output)
+.env
+runs/
