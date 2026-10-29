@@ -54,12 +54,15 @@ class VirtualDisplayDevice:
         size: tuple[int, int, int] | None = None,
         ime_policy: str = "hide",
         push_jar: bool = True,
+        fps: float | None = None,
     ):
         self.adb = Adb(serial)
         self.port = port
         self.size = size or _size_from_env()
         self.ime_policy = ime_policy
         self.push_jar = push_jar
+        # Frame-rate cap for the agent display (0 = none). E8: rendering it at 60 fps costs the user's app frames.
+        self.fps = float(os.environ.get("FENSHEN_VD_FPS", 0)) if fps is None else fps
         self.display_id: int | None = None
         self._proc = None
         self._client: HelperClient | None = None
@@ -80,6 +83,7 @@ class VirtualDisplayDevice:
         self._proc = self.adb.popen(
             "shell", f"CLASSPATH={DEVICE_JAR}", "app_process", "/", "com.fenshen.helper.Main", "serve",
             "--width", str(width), "--height", str(height), "--dpi", str(dpi), "--ime-policy", self.ime_policy,
+            *(["--fps", f"{self.fps:g}"] if self.fps > 0 else []),
         )
         lines: queue.Queue[str] = queue.Queue()
         threading.Thread(target=self._pump, args=(lines,), daemon=True).start()

@@ -5,6 +5,7 @@ import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.hardware.display.VirtualDisplayConfig;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Handler;
@@ -68,7 +69,7 @@ final class AgentDisplay {
     }
 
     static AgentDisplay create(Context context, int width, int height, int dpi, int imePolicy,
-            boolean stealTopFocusDisabled) throws Exception {
+            boolean stealTopFocusDisabled, float fps) throws Exception {
         int flags = FLAG_PUBLIC
                 | FLAG_PRESENTATION
                 | FLAG_OWN_CONTENT_ONLY
@@ -92,7 +93,19 @@ final class AgentDisplay {
         Constructor<DisplayManager> ctor = DisplayManager.class.getDeclaredConstructor(Context.class);
         ctor.setAccessible(true);
         DisplayManager dm = ctor.newInstance(context);
-        VirtualDisplay vd = dm.createVirtualDisplay("fenshen", width, height, dpi, reader.getSurface(), flags);
+        VirtualDisplay vd;
+        if (fps > 0) {
+            // Android 14+: ask the compositor for fewer frames on this display. The agent reads the screen
+            // a few times per step; 60 fps of an app nobody looks at only competes with the user's display.
+            VirtualDisplayConfig config = new VirtualDisplayConfig.Builder("fenshen", width, height, dpi)
+                    .setSurface(reader.getSurface())
+                    .setFlags(flags)
+                    .setRequestedRefreshRate(fps)
+                    .build();
+            vd = dm.createVirtualDisplay(config);
+        } else {
+            vd = dm.createVirtualDisplay("fenshen", width, height, dpi, reader.getSurface(), flags);
+        }
 
         AgentDisplay display = new AgentDisplay(width, height, dpi, flags, imePolicy, vd, reader);
         ShellEnv.setDisplayImePolicy(display.displayId, imePolicy);

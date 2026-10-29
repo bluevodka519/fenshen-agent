@@ -98,40 +98,30 @@ def main() -> int:
     ap.add_argument("--seconds", type=float, default=20)
     ap.add_argument("--task", default="帮我定一个早上7点15的闹钟")
     ap.add_argument("--llm", default="autoglm")
+    ap.add_argument("--conditions", default="A,B,C", help="A,B,C and/or C15 (agent working, display capped at 15 fps)")
     args = ap.parse_args()
 
     adb = Adb()
     adb.shell("pkill", "-f", "com.fenshen.helper", check=False)
     bring_user_app(adb)
 
+    conditions = [c.strip() for c in args.conditions.split(",") if c.strip()]
     results: list[dict] = []
-    for rep in range(args.reps):
-        # A: nothing of ours on the phone
-        adb.shell("pkill", "-f", "com.fenshen.helper", check=False)
-        time.sleep(2)
-        results.append({"condition": "A_no_agent", "rep": rep, **measure(adb, args.seconds)})
-        print(results[-1], flush=True)
 
-        # B: helper + virtual display + UiAutomation, idle
-        with VirtualDisplayDevice(serial=adb.serial) as dev:
-            dev.observe()
-            time.sleep(2)
-            results.append({"condition": "B_agent_idle", "rep": rep, **measure(adb, args.seconds)})
-            print(results[-1], flush=True)
-
-        # C: a real task on the agent display while the user scrolls
+    def working(name: str, rep: int, fps: float) -> None:
+        """A real task on the agent display while the user scrolls."""
         from fenshen.runner import Runner
 
         runner = Runner(serial=adb.serial, llm_spec=args.llm, mirror=False, notify=False)
+        runner.device.fps = fps
         runner.start()
         try:
             session = runner.new_session(args.task)
-            done = threading.Event()
-            t = threading.Thread(target=lambda: (runner.run(session), done.set()), daemon=True)
+            t = threading.Thread(target=runner.run, args=(session,), daemon=True)
             t.start()
             time.sleep(6)  # let it get past the baseline read and into the app
             m = measure(adb, args.seconds)
-            results.append({"condition": "C_agent_working", "rep": rep, "steps_during": len(session.steps),
+            results.append({"condition": name, "rep": rep, "fps_cap": fps, "steps_during": len(session.steps),
                             "task_status": session.outcome.status if session.outcome else "running", **m})
             print(results[-1], flush=True)
             session.abort.set()
@@ -139,8 +129,25 @@ def main() -> int:
         finally:
             runner.close()
 
+    for rep in range(args.reps):
+        if "A" in conditions:  # nothing of ours on the phone
+            adb.shell("pkill", "-f", "com.fenshen.helper", check=False)
+            time.sleep(2)
+            results.append({"condition": "A_no_agent", "rep": rep, **measure(adb, args.seconds)})
+            print(results[-1], flush=True)
+        if "B" in conditions:  # helper + virtual display + UiAutomation, idle
+            with VirtualDisplayDevice(serial=adb.serial) as dev:
+                dev.observe()
+                time.sleep(2)
+                results.append({"condition": "B_agent_idle", "rep": rep, **measure(adb, args.seconds)})
+                print(results[-1], flush=True)
+        if "C" in conditions:
+            working("C_agent_working", rep, 0)
+        if "C15" in conditions:
+            working("C15_agent_working_15fps", rep, 15)
+
     summary = {}
-    for cond in ("A_no_agent", "B_agent_idle", "C_agent_working"):
+    for cond in ("A_no_agent", "B_agent_idle", "C_agent_working", "C15_agent_working_15fps"):
         rows = [r for r in results if r["condition"] == cond and r["valid"]]
         if rows:
             summary[cond] = {
