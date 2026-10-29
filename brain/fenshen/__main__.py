@@ -1,6 +1,6 @@
 """
     python -m fenshen run "帮我定一个早上7点30的闹钟"     run one task in the terminal
-    python -m fenshen web [--port 8765]                   local dashboard (live agent screen, steps, handoff)
+    python -m fenshen web [--port 8765] [--demo]          local dashboard (live agent screen, steps, handoff)
 
 Run from the brain/ directory (or put brain/ on PYTHONPATH).
 Environment: FENSHEN_SERIAL (device), FENSHEN_LLM (default ollama:qwen2.5:7b), OPENAI_API_KEY / OPENAI_BASE_URL.
@@ -57,6 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     web.add_argument("--serial")
     web.add_argument("--llm")
     web.add_argument("--port", type=int, default=8765)
+    web.add_argument("--demo", action="store_true",
+                     help="recording layout: your screen, the agent display (scrcpy) and the steps side by side")
     args = parser.parse_args(argv)
 
     if args.cmd == "run":
@@ -77,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "web":
         from .web import serve
 
-        serve(serial=args.serial, llm_spec=args.llm, port=args.port)
+        serve(serial=args.serial, llm_spec=args.llm, port=args.port, demo=args.demo)
         return 0
     return 2
 

@@ -77,6 +77,10 @@ class DisturbanceMonitor:
     def stop(self) -> dict:
         self._stop.set()
         self._thread.join(timeout=5)
+        return self.counts()
+
+    def counts(self) -> dict:
+        """The tallies so far; safe to call while sampling (the dashboard shows them live)."""
         return {
             "samples": self.samples,
             "top_focus_on_agent_display": self.focus_on_agent,
@@ -86,17 +90,24 @@ class DisturbanceMonitor:
         }
 
 
-def start_mirror(adb: Adb, display_id: int) -> subprocess.Popen | None:
-    """Opens a scrcpy window showing the agent display live (view only), so people can watch it work.
+def start_mirror(adb: Adb, display_id: int, title: str = "",
+                 window: tuple[int, int, int] = (20, 60, 720)) -> subprocess.Popen | None:
+    """Opens a scrcpy window showing a display live (view only), so people can watch it work.
     The agent display is invisible on the phone by design; this window is for the demo and debugging.
+    `window` is (x, y, height); the width follows the display's aspect ratio. View only: scrcpy then
+    refuses --show-touches, so finger dots on the user's screen come from the phone's own developer
+    option ("Show taps"), which the user turns on themselves.
     Optional: skipped when scrcpy is neither in FENSHEN_SCRCPY nor on PATH."""
     exe = os.environ.get("FENSHEN_SCRCPY") or shutil.which("scrcpy")
     if not exe or not Path(exe).exists():
         return None
+    x, y, height = window
     return subprocess.Popen(
         [exe, "--serial", adb.serial, f"--display-id={display_id}", "--no-audio", "--no-control",
-         "--window-title", f"Fenshen agent display {display_id} (live)",
-         "--window-x", "20", "--window-y", "60", "--window-height", "720"],
+         "--window-title", title or f"Fenshen agent display {display_id} (live)",
+         "--window-x", str(x), "--window-y", str(y), "--window-height", str(height)],
+        # scrcpy's bundled adb differs in version from the SDK's: mixing them restarts the adb server
+        # and drops the helper's port forward, so make scrcpy use ours
         env={**os.environ, "ADB": adb.path},
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
@@ -105,7 +116,7 @@ def start_mirror(adb: Adb, display_id: int) -> subprocess.Popen | None:
 class Runner:
     def __init__(self, serial: str | None = None, llm_spec: str | None = None, monitor: bool = True,
                  on_event: Callable[[str, dict], None] | None = None, max_steps: int = 0, mirror: bool = True,
-                 notify: bool = True):
+                 notify: bool = True, mirror_window: tuple[int, int, int] = (20, 60, 720)):
         self.adb = Adb(serial)
         self.device = VirtualDisplayDevice(serial=self.adb.serial)
         self.llm_spec = llm_spec or os.environ.get("FENSHEN_LLM") or "ollama:qwen2.5:7b"
@@ -113,6 +124,7 @@ class Runner:
         self.decider = None
         self.monitor = monitor
         self.mirror = mirror
+        self.mirror_window = mirror_window
         self.user_event = on_event or (lambda kind, data: None)
         self.notifier = Notifier(self.adb) if notify else None
         self._labels: dict[str, str] | None = None
@@ -120,6 +132,7 @@ class Runner:
         self._tasks_started = 0
         self.agent: Agent | None = None
         self._mirror_proc: subprocess.Popen | None = None
+        self._monitor: DisturbanceMonitor | None = None
 
     def on_event(self, kind: str, data: dict) -> None:
         self.user_event(kind, data)
@@ -174,7 +187,7 @@ class Runner:
     def start(self) -> "Runner":
         self.device.start()
         if self.mirror:
-            self._mirror_proc = start_mirror(self.adb, self.device.display_id)
+            self._mirror_proc = self._open_mirror()
         if self.llm is None:
             from .autoglm import AutoGLMDecider
 
@@ -205,7 +218,7 @@ class Runner:
                 self.device.start()
                 if self._mirror_proc:  # the open window still points at the display that was just removed
                     self._mirror_proc.terminate()
-                    self._mirror_proc = start_mirror(self.adb, self.device.display_id)
+                    self._mirror_proc = self._open_mirror()
             self._tasks_started += 1
             try:
                 baseline = session.verifier.prepare(self.device)
@@ -224,11 +237,12 @@ class Runner:
             self.on_event("baseline", {"text": baseline})
         mon = None
         if self.monitor:
-            mon = DisturbanceMonitor(self.adb, session.run_dir / "monitor.jsonl", self.device.display_id).start()
+            mon = self._monitor = DisturbanceMonitor(self.adb, session.run_dir / "monitor.jsonl", self.device.display_id).start()
         try:
             outcome = self.agent.run(session)
         finally:
             if mon:
+                self._monitor = None
                 # A task paused for the user resumes in a new run(): report the whole task, not the last segment.
                 part = mon.stop()
                 total = getattr(session, "disturbance", None)
@@ -242,6 +256,23 @@ class Runner:
                 self.on_event("disturbance", total)
         self.notify_outcome(session, outcome)
         return outcome
+
+    def live_disturbance(self, session: Session) -> dict | None:
+        """Disturbance tallies while the task runs: earlier segments of this task plus the current one."""
+        mon = self._monitor
+        if mon is None:
+            return None
+        total = dict(getattr(session, "disturbance", None) or {})
+        for k, v in mon.counts().items():
+            if isinstance(v, int) and not isinstance(v, bool):
+                total[k] = total.get(k, 0) + v
+            else:
+                total.setdefault(k, v)
+        return total
+
+    def _open_mirror(self) -> subprocess.Popen | None:
+        return start_mirror(self.adb, self.device.display_id, window=self.mirror_window,
+                            title=f"分身屏（手机里的隐藏虚拟屏 display {self.device.display_id}）")
 
     def close(self) -> None:
         if self._mirror_proc:

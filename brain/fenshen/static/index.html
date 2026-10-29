@@ -65,6 +65,22 @@
   .detail { margin: 2px 0 0; color: var(--muted); font-size: 12px; word-break: break-word; }
   .empty { color: var(--muted); }
   code { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  .why { white-space: pre-wrap; }
+  .step:not(:first-child) .why { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .live { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+  .live .chip { font-size: 12px; padding: 2px 10px; border-radius: 999px; font-weight: 600; background: var(--ok-bg); color: var(--ok); }
+  .live .chip.bad { background: var(--bad-bg); color: var(--bad); }
+  /* ?demo: recording layout. The agent display is in its own scrcpy window next to the browser,
+     so this page shows only the task, the live disturbance tallies and the steps, in larger type. */
+  body.demo { font-size: 16px; }
+  body.demo header { padding: 10px 16px; }
+  body.demo main { grid-template-columns: 1fr; max-width: none; padding: 12px; gap: 12px; }
+  body.demo .phone { display: none; }
+  body.demo .step { grid-template-columns: 1fr; }
+  body.demo .step img { display: none; }
+  body.demo .why { font-size: 15px; line-height: 1.6; }
+  body.demo .step:first-child { border-color: var(--accent); }
+  body.demo .live .chip { font-size: 14px; }
 </style>
 </head>
 <body>
@@ -92,6 +108,7 @@
         <span class="kv" id="statusText"></span>
       </div>
       <div class="kv" id="verifier"></div>
+      <div class="live" id="live" hidden></div>
     </div>
 
     <div class="card handoff" id="waiting" hidden>
@@ -124,6 +141,8 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+const DEMO = new URLSearchParams(location.search).has("demo");
+if (DEMO) document.body.classList.add("demo");
 const STATUS_LABEL = { idle: "空闲", running: "执行中", waiting: "等你用完", done: "已完成", needs_user: "等你处理", failed: "失败", aborted: "已中止" };
 const STEP_LABEL = { executed: "已执行", approved: "你允许后执行", invalid: "无效", guarded: "已拦截", ask_user: "请求用户", done: "完成", rejected_done: "完成被驳回", error: "执行出错" };
 let lastState = null;
@@ -150,28 +169,33 @@ $("stopBtn").addEventListener("click", async () => { await post("/api/abort"); p
 
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 
+const ACTION_LABEL = { tap: "点击", fill: "输入", launch: "打开", scroll: "滚动", swipe: "滑动", back: "返回", home: "回桌面",
+  wait: "等待", long_press: "长按", double_tap: "双击", submit: "回车", ask_user: "请你处理", done: "完成", invalid: "无效动作" };
 function describe(d) {
   if (!d || !d.action) return "";
+  const a = ACTION_LABEL[d.action] || d.action;
   const t = d.target ? ` [${d.target}]` : "";
-  if (d.action === "fill") return `fill${t} “${esc(d.text)}”`;
-  if (d.action === "launch") return `launch ${esc(d.package)}`;
-  if (d.action === "scroll") return `scroll${t} ${esc(d.direction)}`;
-  return `${d.action}${t}`;
+  if (d.action === "fill") return `${a}${t} “${esc(d.text)}”`;
+  if (d.action === "launch") return `${a} ${esc(d.text || d.package)}`;
+  if (d.action === "scroll") return `${a}${t} ${esc(d.direction)}`;
+  return `${a}${t}`;
 }
 
 function renderSteps(st) {
   if (st.run_dir === renderedRun && st.steps.length === renderedSteps) return;
   renderedRun = st.run_dir; renderedSteps = st.steps.length;
   if (!st.steps.length) { $("steps").innerHTML = '<div class="empty">还没有步骤。</div>'; return; }
-  $("steps").innerHTML = st.steps.slice().reverse().map((s) => {
+  $("steps").innerHTML = st.steps.slice().reverse().map((s, i) => {
     const d = s.decision || {};
+    // newest step: the model's whole reasoning; older ones: the decision it ended with
+    const why = i === 0 ? (d.thinking || d.thought) : (d.intent || d.thought);
     const img = s.screenshot ? `<img src="/runs/${encodeURIComponent(st.run_dir)}/${encodeURIComponent(s.screenshot)}" alt="第 ${s.index} 步执行前">` : "<div></div>";
     const changed = s.changed === true ? "屏幕已变化" : s.changed === false ? "屏幕无变化" : "";
     const tok = s.prompt_tokens ? ` · ${s.prompt_tokens}+${s.output_tokens} tok` : "";
     const extra = [s.executed && `执行方式：${esc(s.executed)}`, changed, d.action && s.llm_ms && `模型 ${s.llm_ms} ms${tok}`].filter(Boolean).join(" · ");
     return `<div class="step">${img}<div>
       <div class="head"><span class="n">#${s.index}</span><span class="tag ${s.status}">${STEP_LABEL[s.status] || s.status}</span><code>${describe(d)}</code><span class="kv">${esc(s.package)}</span></div>
-      ${d.thought ? `<p class="why">${esc(d.thought)}</p>` : ""}
+      ${why ? `<p class="why">${esc(why)}</p>` : ""}
       ${s.detail ? `<p class="detail">${esc(s.detail)}</p>` : ""}
       ${extra ? `<p class="detail">${extra}</p>` : ""}
     </div></div>`;
@@ -210,7 +234,19 @@ function render(st) {
     const distText = dist ? `打扰监视：采样 ${dist.samples} 次，焦点被 agent 拿走 ${dist.top_focus_on_agent_display} 次，输入法到 agent 屏 ${dist.ime_on_agent_display} 次` : "";
     $("resultText").innerHTML = `<p>${esc(o.message)}</p><p class="kv">共 ${o.steps} 步 · 记录目录 runs/${esc(st.run_dir)}</p>${distText ? `<p class="kv">${esc(distText)}</p>` : ""}`;
   }
+  renderLive(st);
   renderSteps(st);
+}
+
+// Disturbance tallies, live while the task runs (sampled once a second from dumpsys on the phone).
+function renderLive(st) {
+  const d = st.disturbance;
+  $("live").hidden = !d;
+  if (!d) return;
+  const chip = (label, n) => `<span class="chip ${n ? "bad" : ""}">${label} ${n} 次</span>`;
+  $("live").innerHTML = `<span class="kv">不打扰监视（已采样 ${d.samples} 次）</span>`
+    + chip("焦点被抢", d.top_focus_on_agent_display) + chip("输入法被抢", d.ime_on_agent_display)
+    + (d.user_ime_shown_at_start ? chip("你的键盘被收起", d.user_ime_lost_samples) : "");
 }
 
 async function poll() {
@@ -232,7 +268,8 @@ async function frames() {
   setTimeout(frames, 250);
 }
 
-poll(); setInterval(poll, 1000); frames();
+poll(); setInterval(poll, 1000);
+if (!DEMO) frames();  // in the demo layout the agent display has its own scrcpy window
 </script>
 </body>
 </html>

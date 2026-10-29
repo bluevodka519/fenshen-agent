@@ -421,7 +421,9 @@ class AutoGLMDecider:
         # last sentence of the reasoning: what the model says it is about to do (checked by the guard)
         sentences = [x for x in re.split(r"[。\n！!]", thinking) if x.strip()]
         d = {"thought": thinking[:160], "action": "", "target": 0, "text": "", "package": "", "direction": "",
-             "intent": sentences[-1].strip()[-120:] if sentences else ""}
+             "intent": sentences[-1].strip()[-120:] if sentences else "",
+             # full reasoning for the dashboard; the model sometimes writes "\n" as two characters
+             "thinking": thinking.replace("\\n", "\n").strip()}
         w, h = obs.width, obs.height
 
         def px(e) -> list[int]:

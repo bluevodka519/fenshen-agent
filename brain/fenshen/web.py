@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import time
+import webbrowser
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,7 +18,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from .agent import Session
-from .runner import RUNS, Runner
+from .runner import RUNS, Runner, start_mirror
 
 STATIC = Path(__file__).with_name("static")
 
@@ -130,7 +131,7 @@ class Dashboard:
                          "app": self.runner.label(s.steps[-1].package) if s.steps else ""}
                         if s and s.pending and not self.running else None),
             "steps": [asdict(st) for st in s.steps] if s else [],
-            "disturbance": self.disturbance,
+            "disturbance": (self.runner.live_disturbance(s) if s and self.running else None) or self.disturbance,
             "elapsed_s": round(time.time() - self.started_at, 1) if self.started_at and self.running else None,
         }
 
@@ -211,9 +212,15 @@ def _make_handler(dash: Dashboard):
     return Handler
 
 
-def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 8765) -> None:
+# --demo on a 1920x1080 screen: the user's screen left, the agent display next to it, and the browser
+# snapped to the right half (Win + Right) with the steps and the model's reasoning
+DEMO_USER_WINDOW = (8, 31, 990)
+DEMO_AGENT_WINDOW = (478, 31, 990)
+
+
+def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 8765, demo: bool = False) -> None:
     dash_ref: dict = {}
-    runner = Runner(serial=serial, llm_spec=llm_spec, mirror=False,
+    runner = Runner(serial=serial, llm_spec=llm_spec, mirror=demo, mirror_window=DEMO_AGENT_WINDOW,
                     on_event=lambda kind, data: dash_ref["d"].on_event(kind, data))
     dash = Dashboard(runner)
     dash_ref["d"] = dash
@@ -222,12 +229,21 @@ def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 87
     except OSError as e:
         raise SystemExit(f"port {port} is in use (another dashboard still running?): {e}")
     runner.start()
-    print(f"Fenshen dashboard: http://127.0.0.1:{port}  (agent display {runner.device.display_id}, model {runner.model_name})",
+    url = f"http://127.0.0.1:{port}" + ("/?demo" if demo else "")
+    print(f"Fenshen dashboard: {url}  (agent display {runner.device.display_id}, model {runner.model_name})",
           flush=True)
+    user_mirror = None
+    if demo:
+        user_mirror = start_mirror(runner.adb, 0, title="我的手机屏幕（实时投屏，只看不控）", window=DEMO_USER_WINDOW)
+        if user_mirror is None or runner._mirror_proc is None:
+            print("scrcpy not found: set FENSHEN_SCRCPY to scrcpy.exe to get the two phone windows", flush=True)
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        if user_mirror:
+            user_mirror.terminate()
         runner.close()
