@@ -85,6 +85,9 @@ HANDOFF_ONLY = re.compile(
 INTENT_HANDOFF = re.compile(r"(点|按|tap|click)[^。.!！?？]{0,12}(提交订单|去支付|立即支付|确认支付|付款|下单|pay)", re.I)
 # The "+" of a quantity stepper; Meituan labels it "增加，已添加16份" (the count is right there).
 STEPPER_ADD = re.compile(r"^(?:增加|加一份|\+|＋)\D{0,8}?(\d+)\s*(?:份|件|个|杯|串)")
+# The button that leaves the shop for the order page. When it does nothing, a hint the model cannot see
+# (a toast: required item missing, below the minimum, purchase limit) is the usual cause.
+CHECKOUT = re.compile(r"去结算|^结算|去下单")
 # Subset of HANDOFF_ONLY: a first tap is blocked with feedback instead of ending the task (see run()).
 LOGIN = re.compile(r"登录|登入|注册|sign in|log in|login", re.I)
 
@@ -200,6 +203,7 @@ class Session:
         self.pending: dict | None = None  # a guarded action the user may approve (NEEDS_CONFIRM only)
         self.approved = False
         self.login_blocks: dict[str, int] = {}  # login buttons the model tapped once already
+        self.checkout_noops = 0  # taps on "去结算" that changed nothing
         self.decider_state: dict = {}  # private memory of the decider (e.g. AutoGLM's conversation)
         self.outcome: Outcome | None = None
         self.verifier: Verifier = verifier_for(task)
@@ -428,6 +432,14 @@ class Agent:
             if reclaimed:
                 record.detail = reclaimed
             self._record(session, record)
+            checkout_noop = d["action"] == "tap" and not record.changed and bool(CHECKOUT.search(self._tap_label(d, obs)))
+            if checkout_noop:
+                session.checkout_noops += 1
+                if session.checkout_noops >= 2:
+                    # Leaving to look for the cart lost it once (E11): stop while everything is still there.
+                    return self._finish(session, "needs_user",
+                                        "点了两次「去结算」页面都没有反应，可能弹出了我看不到的提示（必选品没选、没到起送价、限购之类）。"
+                                        "购物车里的东西都还在：请你在手机上打开这个 App 看一眼，分身做到一半的页面会出现在你的屏幕上")
             effect = reclaimed or self._effect(d, target, after)
             if not effect and d["action"] == "swipe" and not record.changed:
                 effect = self._unscrollable(d["point"], fresh)
@@ -442,6 +454,9 @@ class Agent:
                 feedback = f"{feedback}上一步的结果：{effect}"
             if reclaimed:
                 feedback = reclaimed
+            if checkout_noop:
+                feedback = ("上一步点了「去结算」，页面没有变化：可能有一闪而过的提示（必选品、起送价、限购）。"
+                            "不要按返回离开这个页面，购物车可能会丢；先看看页面上有没有要选的必选品，再点一次「去结算」，还不行就交给用户。")
             obs = after
 
         return self._finish(session, "needs_user", f"已经执行了 {self.max_steps} 步还没完成，先停下来")
@@ -456,6 +471,22 @@ class Agent:
         if not hits:
             return None
         return min(hits, key=lambda e: (e.bounds[2] - e.bounds[0]) * (e.bounds[3] - e.bounds[1]))
+
+    @staticmethod
+    def _labeled_at(obs: Observation, point) -> str:
+        """Text of the innermost element *with a label* under a point. Taps often land on an unlabeled
+        inner node of a labeled button: Meituan's 去结算 (E11), commerce pay bars."""
+        x, y = point
+        hits = [e for e in obs.elements if e.label and e.bounds[0] <= x < e.bounds[2] and e.bounds[1] <= y < e.bounds[3]]
+        if not hits:
+            return ""
+        return min(hits, key=lambda e: (e.bounds[2] - e.bounds[0]) * (e.bounds[3] - e.bounds[1])).label
+
+    def _tap_label(self, d: dict, obs: Observation) -> str:
+        el = self._target_element(d, obs)
+        if el is not None and el.label:
+            return el.label
+        return self._labeled_at(obs, d["point"]) if d.get("point") is not None else ""
 
     def _bind_point_target(self, d: dict, obs: Observation) -> None:
         """For coordinate actions, remember which element sits under the point (for guards and logs)."""
@@ -567,7 +598,7 @@ class Agent:
         if d["action"] not in ("tap", "fill", "submit", "long_press", "double_tap"):
             return None
         el = self._target_element(d, obs)
-        label = el.label if el else ""
+        label = (el.label if el else "") or self._tap_label(d, obs)
         if el is not None and el.password:
             return "handoff", f"「{el.label}」是密码框，密码必须由你本人输入"
         if label and HANDOFF_ONLY.search(label):

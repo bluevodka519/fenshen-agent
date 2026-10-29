@@ -262,6 +262,31 @@ class QuantityTest(unittest.TestCase):
         self.assertEqual(wanted_quantity("帮我点瑞幸的生椰拿铁", "生椰拿铁（原创） ¥ 12.9"), (1, ""))
 
 
+class CheckoutNoopTest(unittest.TestCase):
+    def test_dead_checkout_button_hands_over_instead_of_leaving_the_shop(self):
+        # E11: "去结算" did nothing twice; the model then pressed back to look for the cart, and the cart
+        # was gone. The tap lands on an unlabeled node inside the labeled button.
+        phone = FakePhone()
+        phone.observe = lambda: Observation(1, 7, 720, 1600, "com.sankuai.meituan", [], [
+            Element(1, 1, "button", "购物车，已添加10件商品，点击查看", (20, 1440, 140, 1520), 1, clickable=True),
+            Element(2, 2, "button", "去结算", (500, 1440, 700, 1520), 1, clickable=True),
+            Element(3, 3, "button", "", (520, 1450, 690, 1510), 1, clickable=True)], raw={})
+        phone.tap = lambda x, y: phone.actions.append(("tap", x, y)) or "tap"
+
+        class AtPoint(Script):
+            def decide(self, session, obs, feedback):
+                dec = super().decide(session, obs, feedback)
+                dec.d.update(point=[601, 1481], target=0)
+                return dec
+
+        agent, session = make(phone, AtPoint(("tap", 0, ""), ("tap", 0, ""), ("back", 0, "")))
+        out = agent.run(session)
+        self.assertEqual(out.status, "needs_user")
+        self.assertIn("去结算", out.message)
+        self.assertIn("不要按返回", agent.decider.feedback[1])
+        self.assertEqual(len(phone.actions), 2, "never got to the back press")
+
+
 class ConnectionLostTest(unittest.TestCase):
     def test_phone_going_away_is_reported_plainly_and_not_resumed(self):
         # 2026-10-29: the adb server restarted mid-task; the helper died with it and "continue" then
