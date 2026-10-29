@@ -262,6 +262,42 @@ class QuantityTest(unittest.TestCase):
         self.assertEqual(wanted_quantity("帮我点瑞幸的生椰拿铁", "生椰拿铁（原创） ¥ 12.9"), (1, ""))
 
 
+class RequiredItemTest(unittest.TestCase):
+    """The required-item sheet as the tree had it (real phone, 2026-10-29), shop page behind it included."""
+
+    def sheet(self, chosen):
+        labels = ["", "再买¥29.3，可再减¥1 凑单", "", "请选择必选品后才能下单", "",
+                  "◆◆◆【一点辣不吃，请师傅注意】 1串 ¥ 0"]
+        labels += ["减少，已添加3份", "3", "增加，已添加3份", "前3件¥0.16/件"] if chosen else ["3份起购"]
+        labels += ["◆◆◆【微辣就好，悠着点撒】 2克 ¥ 0 .01", "3份起购",
+                   "到手约 ¥ 48 .7 免配送费", "去结算" if chosen else "未点必选品", "购物车，已添加12件商品，点击查看",
+                   "碳烤土豆片＃咔呲咔呲⭐⭐⭐ ¥ 3 .5", "增加，已添加3份"]  # behind the sheet
+        els = [Element(i + 1, i, "button", l, (0, i * 40, 720, i * 40 + 40), 1, clickable=True) for i, l in enumerate(labels)]
+        return Observation(1, 7, 720, 1600, "com.sankuai.meituan", [], els, raw={})
+
+    def tap(self, obs, label):
+        agent, _ = make(FakePhone(), Script())
+        el = [e for e in obs.elements if e.label == label]
+        return agent._required_item_check({"action": "tap", "target": el[0].idx, "text": ""}, obs)
+
+    def test_first_choice_is_allowed(self):
+        self.assertIsNone(self.tap(self.sheet(chosen=False), "3份起购"))
+
+    def test_a_second_spice_level_is_refused(self):
+        problem = self.tap(self.sheet(chosen=True), "3份起购")
+        self.assertIn("只要选一样", problem)
+        self.assertIn("一点辣不吃", problem)
+
+    def test_more_of_the_chosen_one_is_refused(self):
+        self.assertIn("去结算", self.tap(self.sheet(chosen=True), "增加，已添加3份"))
+
+    def test_the_shop_page_behind_the_sheet_is_not_the_sheet(self):
+        obs = self.sheet(chosen=False)
+        agent, _ = make(FakePhone(), Script())
+        behind = obs.elements[-1]  # the potato "+" under the sheet
+        self.assertIsNone(agent._required_item_check({"action": "tap", "target": behind.idx, "text": ""}, obs))
+
+
 class CheckoutNoopTest(unittest.TestCase):
     def test_dead_checkout_button_hands_over_instead_of_leaving_the_shop(self):
         # E11: "去结算" did nothing twice; the model then pressed back to look for the cart, and the cart

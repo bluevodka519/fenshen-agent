@@ -85,6 +85,10 @@ HANDOFF_ONLY = re.compile(
 INTENT_HANDOFF = re.compile(r"(点|按|tap|click)[^。.!！?？]{0,12}(提交订单|去支付|立即支付|确认支付|付款|下单|pay)", re.I)
 # The "+" of a quantity stepper; Meituan labels it "增加，已添加16份" (the count is right there).
 STEPPER_ADD = re.compile(r"^(?:增加|加一份|\+|＋)\D{0,8}?(\d+)\s*(?:份|件|个|杯|串)")
+# A shop's required-item sheet ("请选择必选品后才能下单"): one choice for the whole order, e.g. a spice level.
+REQUIRED_HEADER = re.compile(r"必选品")
+SHEET_END = re.compile(r"^(?:到手约|去结算|未点必选品|购物车，)")
+ADD_NEW = re.compile(r"^\d+份起购$|^选规格$|^加入购物车$")
 # The button that leaves the shop for the order page. When it does nothing, a hint the model cannot see
 # (a toast: required item missing, below the minimum, purchase limit) is the usual cause.
 CHECKOUT = re.compile(r"去结算|^结算|去下单")
@@ -292,7 +296,8 @@ class Agent:
                                 prompt_tokens=dec.prompt_tokens, output_tokens=dec.output_tokens, raw=dec.raw)
 
             # 1) the action must make sense on this screen
-            problem = self._validate(d, obs) or self._quantity_check(session, d, obs)
+            problem = (self._validate(d, obs) or self._required_item_check(d, obs)
+                       or self._quantity_check(session, d, obs))
             if problem:
                 invalid_streak += 1
                 record.status, record.detail = "invalid", problem
@@ -583,6 +588,29 @@ class Agent:
         asked = f"任务要 {want} 份" + (f"「{item}」" if item else "")
         more = "多出来的是店家的起购量，保持不动，最后告诉用户。" if have > want else ""
         return f"「{name}」已经加了 {have} 份，{asked}，够了，不要再点「+」。{more}接着去加任务里的下一样东西；都加好了就去结算。"
+
+    def _required_item_check(self, d: dict, obs: Observation) -> str | None:
+        """A shop's required item (未点必选品: spice level, cutlery) takes one choice for the whole order.
+        The model picked three spice levels, three of each, "one for each dish" (real phone, 2026-10-29).
+        Once an option in the sheet is added, adding another one or more of it is refused."""
+        if d["action"] not in ("tap", "double_tap"):
+            return None
+        els = obs.elements
+        start = next((k for k, e in enumerate(els) if REQUIRED_HEADER.search(e.label)), None)
+        if start is None:
+            return None
+        # the sheet's own rows only: the shop page behind it is in the tree too
+        end = next((k for k in range(start + 1, len(els)) if SHEET_END.match(els[k].label)), len(els))
+        sheet = els[start + 1:end]
+        el = self._target_element(d, obs)
+        if el is None or not any(e is el for e in sheet) or not (ADD_NEW.match(el.label) or STEPPER_ADD.match(el.label)):
+            return None
+        chosen = [e for e in sheet if (m := STEPPER_ADD.match(e.label)) and int(m.group(1)) > 0]
+        if not chosen:
+            return None
+        name = re.split(r"\s*[¥￥]", self._product_for(chosen[0], obs))[0].strip("◆ ") or "一样"
+        return (f"必选品整单只要选一样（比如辣度选一种，不是每个菜各配一种），已经选了「{name}」，"
+                "份数按店家的起购量就行，不要再加别的。直接点「去结算」。")
 
     @staticmethod
     def _product_for(el: Element, obs: Observation) -> str:
