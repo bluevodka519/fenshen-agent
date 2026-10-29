@@ -73,10 +73,14 @@ SYSTEM_PROMPT = """你是"分身"：在用户手机的一块隐藏屏幕上，�
 
 # Must be done by the user themself: the agent never performs these, even with approval.
 HANDOFF_ONLY = re.compile(
-    r"支付|付款|购买|下单|提交订单|确认订单|登录|登入|注册|密码|验证码"
+    r"支付|付款|购买|下单|提交订单|确认订单|登录|登入|注册|密码|验证码|(?<!不)开通|(?<!不)续费|免密"
     r"|\bpay\b|payment|purchase|\bbuy\b|place order|checkout|sign in|log in|login|password|verification code|\botp\b",
     re.I,
 )
+# The model's own statement of what it is about to tap (its last sentence). Used when the button has no
+# readable label: commerce apps often draw their own UI, and a guard that only reads labels would let a
+# screenshot model tap "提交订单" unseen.
+INTENT_HANDOFF = re.compile(r"(点|按|tap|click)[^。.!！?？]{0,12}(提交订单|去支付|立即支付|确认支付|付款|下单|pay)", re.I)
 # Subset of HANDOFF_ONLY: a first tap is blocked with feedback instead of ending the task (see run()).
 LOGIN = re.compile(r"登录|登入|注册|sign in|log in|login", re.I)
 
@@ -462,11 +466,25 @@ class Agent:
             return None
 
     def _point_still_valid(self, d: dict, before: Observation, fresh: Observation) -> bool:
+        """Is the thing under the point still the thing the model saw? Same kind of element in about
+        the same place counts, even if its text changed: Meituan's search box rotates its placeholder
+        every few seconds, and comparing labels refused the same tap 7 times (E10)."""
         old = self._element_at(before, d["point"])
         new = self._element_at(fresh, d["point"])
         if old is None:
             return True  # nothing readable there (canvas/WebView): trust the screenshot the model saw
-        return new is not None and new.role == old.role and new.label == old.label
+        if new is None or new.role != old.role:
+            return False
+        return new.label == old.label or self._overlap(old.bounds, new.bounds) >= 0.6
+
+    @staticmethod
+    def _overlap(a, b) -> float:
+        """Intersection over union of two (left, top, right, bottom) boxes."""
+        iw = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+        ih = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+        inter = iw * ih
+        union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+        return inter / union if union > 0 else 0.0
 
     # ------------------------------------------------------------------ pieces
 
@@ -521,6 +539,9 @@ class Agent:
             return "handoff", f"「{el.label}」是密码框，密码必须由你本人输入"
         if label and HANDOFF_ONLY.search(label):
             return "handoff", f"下一步是「{label}」（付款/下单/登录/验证码类）。按约定我停在这里，必须由你本人在手机上完成"
+        intent = INTENT_HANDOFF.search(d.get("intent", ""))
+        if d["action"] in ("tap", "long_press", "double_tap") and intent:
+            return "handoff", f"模型说下一步要「{intent.group(0)}」（付款/下单类）。按约定我停在这里，必须由你本人在手机上完成"
         if label and NEEDS_CONFIRM.search(label):
             return "confirm", f"下一步要点「{label}」，这是删除、同意、发送这一类撤不回的操作，需要你允许"
         if d.get("sensitive"):

@@ -69,7 +69,7 @@ final class AgentDisplay {
     }
 
     static AgentDisplay create(Context context, int width, int height, int dpi, int imePolicy,
-            boolean stealTopFocusDisabled, float fps) throws Exception {
+            boolean stealTopFocusDisabled, float fps, boolean ownDisplayGroup) throws Exception {
         int flags = FLAG_PUBLIC
                 | FLAG_PRESENTATION
                 | FLAG_OWN_CONTENT_ONLY
@@ -78,11 +78,19 @@ final class AgentDisplay {
                 | FLAG_DESTROY_CONTENT_ON_REMOVAL
                 | FLAG_SHOULD_SHOW_SYSTEM_DECORATIONS
                 | FLAG_TRUSTED
-                | FLAG_OWN_DISPLAY_GROUP
-                | FLAG_ALWAYS_UNLOCKED
                 | FLAG_TOUCH_FEEDBACK_DISABLED
-                | FLAG_OWN_FOCUS
-                | FLAG_DEVICE_DISPLAY_GROUP;
+                | FLAG_OWN_FOCUS;
+        if (ownDisplayGroup) {
+            // scrcpy's choice: an independent power group, so the display can run while the phone's
+            // screen is off. On a real phone (Seeker, Android 16) that group went to state OFF while
+            // the phone was awake and in use, and apps on it were never drawn (E10); a wake key aimed
+            // at the display did not bring it back.
+            flags |= FLAG_OWN_DISPLAY_GROUP | FLAG_ALWAYS_UNLOCKED;
+        } else {
+            // Default: join the phone's display group, so the agent display is on whenever the
+            // user's screen is on (which is exactly when the user is using the phone).
+            flags |= FLAG_DEVICE_DISPLAY_GROUP;
+        }
         if (stealTopFocusDisabled) {
             flags |= FLAG_STEAL_TOP_FOCUS_DISABLED;
         }

@@ -92,6 +92,69 @@ def contact_rows(*rows):
     return "\n".join(lines)
 
 
+class CheckoutTest(unittest.TestCase):
+    def test_parse(self):
+        from fenshen.verify import parse_order, CheckoutVerifier
+        self.assertEqual(parse_order("帮我在美团点一杯瑞幸的生椰拿铁，停在提交订单前"), ("生椰拿铁", "瑞幸"))
+        self.assertEqual(parse_order("美团外卖点一份黄焖鸡米饭，付款前停下"), ("黄焖鸡米饭", ""))
+        self.assertIsNone(parse_order("在美团点一杯咖啡"))  # no stop-before-paying boundary: not this verifier
+        self.assertIsInstance(verifier_for("帮我在美团点一杯瑞幸的生椰拿铁，停在提交订单前"), CheckoutVerifier)
+
+    def page(self, *labels, package="com.sankuai.meituan"):
+        from fenshen.observation import Element, Observation
+        els = [Element(i + 1, i, "button", l, (0, 0, 10, 10), 1, clickable=True) for i, l in enumerate(labels)]
+        return Observation(1, 2, 720, 1600, package, [], els, raw={})
+
+    def device(self, obs):
+        return type("D", (), {"observe": lambda self: obs, "adb": None})()
+
+    def test_confirm_page(self):
+        from fenshen.verify import CheckoutVerifier
+        v = CheckoutVerifier("生椰拿铁", "瑞幸")
+        dev = self.device(self.page("瑞幸咖啡", "生椰拿铁 大杯 冰", "实付 ¥15.9", "提交订单"))
+        self.assertTrue(v.goal_reached(dev))
+        self.assertTrue(v.check(dev, None, "").ok)
+        self.assertIsNone(v.unintended_change(dev))
+
+    def test_cart_is_not_the_confirm_page(self):
+        from fenshen.verify import CheckoutVerifier
+        v = CheckoutVerifier("生椰拿铁")
+        self.assertFalse(v.goal_reached(self.device(self.page("生椰拿铁", "¥15.9", "去结算"))))
+
+    def test_real_confirm_page_without_a_pay_button_in_the_tree(self):
+        # Meituan on the Seeker (E10), personal details replaced: the button says 立即支付 and the bottom
+        # bar has no accessibility nodes at all
+        from fenshen.verify import CheckoutVerifier
+        v = CheckoutVerifier("生椰拿铁", "瑞幸")
+        dev = self.device(self.page(
+            "", "本单由商家配送，实际送达时间可联系商家确认", "外卖配送", "到店自取", "新客减2",
+            "某 先生 预计18:43送达 瑞幸咖啡(某某店) 生椰拿铁（原创） 优惠后 ¥ 22.9 ¥ 24 x1 商品原价 ¥ 24 打包费 ¥ 1 用户配送费 活动…",
+            "某小区-1号楼 101", "默认，大杯，冰，深烘拼配，默认浓度，不另外加糖，无奶油",
+            "美团红包 待使用 10元红包", "商家代金券、商品优惠 - ¥ 2.1", "请填写您的要求", "请选择"))
+        self.assertTrue(v.goal_reached(dev))
+        verdict = v.check(dev, None, "")
+        self.assertTrue(verdict.ok, verdict.evidence)
+        self.assertIn("生椰拿铁（原创）", verdict.evidence)
+        self.assertIn("瑞幸咖啡(某某店)", verdict.evidence)
+        for private in ["先生", "1号楼"]:
+            self.assertNotIn(private, verdict.evidence)
+
+    def test_shop_page_with_a_full_cart_is_not_the_confirm_page(self):
+        from fenshen.verify import CheckoutVerifier
+        v = CheckoutVerifier("生椰拿铁")
+        dev = self.device(self.page("生椰拿铁（原创）", "¥12.9", "到手约 ¥12.9 共减¥12.1", "打包费 ¥1",
+                                    "配送约¥1 约30分钟送达", "去结算"))
+        self.assertFalse(v.goal_reached(dev))
+        self.assertFalse(v.check(dev, None, "").ok)
+
+    def test_submitted_order_stops_everything(self):
+        from fenshen.verify import CheckoutVerifier
+        v = CheckoutVerifier("生椰拿铁")
+        dev = self.device(self.page("生椰拿铁", "选择支付方式", "确认支付"))
+        self.assertFalse(v.goal_reached(dev))
+        self.assertIn("支付", v.unintended_change(dev))
+
+
 class ScreenEvidenceTest(unittest.TestCase):
     def screen(self, *texts):
         from fenshen.observation import Element, Observation

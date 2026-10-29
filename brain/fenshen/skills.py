@@ -99,6 +99,25 @@ SKILLS = [
 ]
 
 
+SKILLS.append(Skill(
+    package="com.sankuai.meituan",
+    keywords=r"美团|外卖",
+    text=(
+        "美团（com.sankuai.meituan）点外卖：首页点「外卖」进入外卖频道，或用顶部搜索框搜店名、商品；进店后找到商品，"
+        "点「选规格」或「+」，选好规格后点「加入购物车」/「选好了」；购物车里有别的商品就先清空；然后点「去结算」进入确认订单页。"
+        "确认订单页的「提交订单」和任何支付按钮由用户本人点，到这一页就用 done。弹出红包、优惠券、会员开通之类的弹窗就关掉，"
+        "不要开通任何会员或付费服务。"
+    ),
+    visual=(
+        "美团点外卖要点：首页点「外卖」进入外卖频道，也可以直接用顶部搜索框搜店名或商品。进店后找到商品，点「选规格」或「+」，"
+        "选好杯型、温度、甜度后点「加入购物车」或「选好了」。如果这家店的购物车里已经有别的商品，先清空再加。"
+        "然后点右下角「去结算」，进入确认订单页。确认订单页底部的「提交订单」和任何支付按钮都由用户本人来点："
+        "到了确认订单页、商品和数量都对，任务就完成了，用 finish，不要点「提交订单」。"
+        "弹出红包、优惠券、开通会员、定位授权一类的弹窗时，点 × 或「暂不」「跳过」关掉，不要领取需要付费的东西，不要开通任何会员。"
+    ),
+))
+
+
 # System permission dialogs: shown by package only (never matched by task words). Declining is the
 # default; granting needs the user anyway (NEEDS_CONFIRM matches "Allow"). In the 2026-10-29 benchmark
 # the model chose "Allow" for a notification prompt and two contact tasks stopped for the user.

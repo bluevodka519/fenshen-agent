@@ -418,7 +418,10 @@ class AutoGLMDecider:
         return Decision(d, ms, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), raw=content)
 
     def _to_decision(self, a: dict, obs: Observation, thinking: str, st: dict) -> dict:
-        d = {"thought": thinking[:160], "action": "", "target": 0, "text": "", "package": "", "direction": ""}
+        # last sentence of the reasoning: what the model says it is about to do (checked by the guard)
+        sentences = [x for x in re.split(r"[。\n！!]", thinking) if x.strip()]
+        d = {"thought": thinking[:160], "action": "", "target": 0, "text": "", "package": "", "direction": "",
+             "intent": sentences[-1].strip()[-120:] if sentences else ""}
         w, h = obs.width, obs.height
 
         def px(e) -> list[int]:

@@ -175,6 +175,49 @@ class LoginTest(unittest.TestCase):
         self.assertIn("登录入口", agent.decider.feedback[1])
 
 
+class IntentGuardTest(unittest.TestCase):
+    def test_unlabelled_pay_button_is_caught_by_the_models_own_words(self):
+        # commerce apps may draw the submit button themselves: no label in the tree to match
+        phone = FakePhone()
+        base = phone.observe
+
+        def opaque_button():
+            o = base()
+            o.elements.append(Element(9, 19, "button", "", (40, 1500, 700, 1580), 1, clickable=True))
+            return o
+
+        phone.observe = opaque_button
+
+        class Says(Script):
+            def decide(self, session, obs, feedback):
+                dec = super().decide(session, obs, feedback)
+                dec.d["intent"] = "商品和数量都对了，现在点击底部的提交订单按钮"
+                return dec
+
+        agent, session = make(phone, Says(("tap", 9, "")))
+        out = agent.run(session)
+        self.assertEqual(out.status, "needs_user")
+        self.assertIsNone(session.pending, "paying cannot be approved for the agent to do")
+        self.assertNotIn(("click", ""), phone.actions)
+
+
+class ChangedWhileThinkingTest(unittest.TestCase):
+    def test_rotating_placeholder_is_the_same_element(self):
+        # Meituan's search box changes its hint text every few seconds (real phone, E10)
+        agent, _ = make(FakePhone(), Script())
+        point = {"point": [360, 150]}
+        before = Observation(1, 7, 720, 1600, "m", [], [Element(1, 1, "button", "宋二爷·乡下土菜馆", (40, 110, 680, 190), 1, clickable=True)], raw={})
+        after = Observation(2, 7, 720, 1600, "m", [], [Element(1, 2, "button", "营养又健康的快餐盒饭", (40, 110, 680, 190), 1, clickable=True)], raw={})
+        self.assertTrue(agent._point_still_valid(point, before, after))
+
+    def test_a_different_element_is_not(self):
+        agent, _ = make(FakePhone(), Script())
+        point = {"point": [360, 150]}
+        before = Observation(1, 7, 720, 1600, "m", [], [Element(1, 1, "button", "搜索", (40, 110, 680, 190), 1, clickable=True)], raw={})
+        dialog = Observation(2, 7, 720, 1600, "m", [], [Element(1, 2, "button", "领取红包", (0, 0, 720, 900), 1, clickable=True)], raw={})
+        self.assertFalse(agent._point_still_valid(point, before, dialog))
+
+
 class StopTest(unittest.TestCase):
     def test_three_invalid_actions_in_a_row(self):
         phone = FakePhone()

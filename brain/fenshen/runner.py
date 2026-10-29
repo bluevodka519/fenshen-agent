@@ -203,6 +203,9 @@ class Runner:
                 # spent 24 steps searching Contacts (2026-10-29). DESTROY_CONTENT_ON_REMOVAL cleans up.
                 self.device.close()
                 self.device.start()
+                if self._mirror_proc:  # the open window still points at the display that was just removed
+                    self._mirror_proc.terminate()
+                    self._mirror_proc = start_mirror(self.adb, self.device.display_id)
             self._tasks_started += 1
             try:
                 baseline = session.verifier.prepare(self.device)

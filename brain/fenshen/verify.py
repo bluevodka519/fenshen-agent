@@ -478,6 +478,93 @@ class AllOf:
                        "；".join(v.evidence for v in verdicts))
 
 
+# ------------------------------------------------------------------ takeout up to the checkout boundary
+
+MEITUAN_PKG = "com.sankuai.meituan"
+
+
+def parse_order(task: str) -> tuple[str, str] | None:
+    """'在美团点一杯瑞幸的生椰拿铁，停在提交订单前' -> (item, shop). Only for tasks that end before paying."""
+    if not (re.search(r"美团|外卖", task) and re.search(r"(提交订单|付款|支付|下单)前", task)):
+        return None
+    m = re.search(r"(?:点|买|订)(?:一|两|三|1|2|3)?(?:杯|份|个|碗|盒)?\s*([^，,。\s]+?)\s*(?:[，,。]|停|然后|并|$)", task)
+    if not m:
+        return None
+    phrase = m.group(1)
+    shop, _, item = phrase.rpartition("的")
+    return (item or phrase), shop
+
+
+class CheckoutVerifier:
+    """Done means: the agent display shows Meituan's order confirmation with the requested item, and
+    nothing was submitted or paid. Read from the accessibility tree, so weaker than a system database:
+    there is no system record of a cart or a draft order.
+
+    The page is recognised by its structure, not by the pay button: on the real app (Seeker, E10) the
+    button says 立即支付 and the whole bottom bar is drawn without accessibility nodes, so a check that
+    required a button label rejected a correct stop."""
+
+    SUBMIT = re.compile(r"提交订单|去支付|立即支付|确认支付")
+    CHECKOUT_ONLY = re.compile(r"提交订单|确认订单|立即支付|实付|应付")
+    ORDER_DETAILS = (re.compile(r"预计\s*\d{1,2}:\d{2}\s*送达|外卖配送|到店自取"),  # delivery
+                     re.compile(r"商品原价|打包费|配送费"),                          # price breakdown
+                     re.compile(r"请填写您的要求|备注|餐具"))                        # order notes
+    NOT_CHECKOUT = re.compile(r"去结算|加入购物车|选规格")  # the shop page and its cart
+    SUBMITTED = re.compile(r"支付成功|订单已提交|等待商家接单|商家已接单|收银台|选择支付方式|输入支付密码")
+
+    def __init__(self, item: str, shop: str = ""):
+        self.item, self.shop = item, shop
+        self.description = (f"agent 屏停在美团确认订单页：页面上有「{item}」"
+                            + (f"（{shop}）" if shop else "") + "，没有点支付，没有进入支付页")
+
+    @staticmethod
+    def _text(obs: Observation) -> str:
+        return " ".join(f"{e.label} {e.text}" for e in obs.elements)
+
+    @classmethod
+    def _is_confirm_page(cls, text: str) -> bool:
+        if cls.NOT_CHECKOUT.search(text):
+            return False
+        return bool(cls.CHECKOUT_ONLY.search(text)) or sum(bool(p.search(text)) for p in cls.ORDER_DETAILS) >= 2
+
+    def prepare(self, device) -> str:
+        return "基线：无（下单类任务没有系统级记录，完成判定读确认订单页）"
+
+    def goal_reached(self, device) -> bool:
+        obs = device.observe()
+        text = self._text(obs)
+        return (obs.package == MEITUAN_PKG and self.item in text and self._is_confirm_page(text)
+                and not self.SUBMITTED.search(text))
+
+    def unintended_change(self, device) -> str | None:
+        obs = device.observe()
+        if obs.package == MEITUAN_PKG and self.SUBMITTED.search(self._text(obs)):
+            return "看起来订单已经提交或进入了支付页面，这一步本应由你来做，我先停下来，请你马上看一下"
+        return None
+
+    def check(self, device, obs: Observation, claimed: str) -> Verdict:
+        obs = device.observe()
+        text = self._text(obs)
+        if obs.package != MEITUAN_PKG:
+            return Verdict(False, "确认订单页", f"agent 屏上不是美团（{obs.package or '桌面'}）")
+        if self.SUBMITTED.search(text):
+            return Verdict(False, "确认订单页", "页面显示订单已提交或进入了支付，这不应该发生")
+        if not self._is_confirm_page(text):
+            return Verdict(False, "确认订单页", "当前不是确认订单页（没有订单明细、配送信息这些确认页才有的内容）")
+        if self.item not in text:
+            return Verdict(False, "确认订单页", f"确认订单页上找不到「{self.item}」")
+        # Quote the item and shop names only: the same list node also holds the user's name and address.
+        item = re.search(re.escape(self.item) + r"[^\s¥￥]{0,12}", text).group(0)
+        after = text[text.index(item):]
+        prices = [re.sub(r"\s", "", p) for p in re.findall(r"[¥￥]\s?\d+(?:\.\d+)?", after)[:1]]
+        shop = re.search(re.escape(self.shop) + r"[^\s¥￥]{0,12}", text) if self.shop else None
+        shop_note = f"，{shop.group(0)}" if shop else (f"（页面上没看到店名「{self.shop}」）" if self.shop else "")
+        submit = [e.label for e in obs.elements if self.SUBMIT.search(e.label)]
+        button = f"「{submit[0]}」未点击" if submit else "支付按钮没有被点（美团的支付栏不在界面树里）"
+        return Verdict(True, "确认订单页（界面树）",
+                       f"停在确认订单页：「{item}」{' '.join(prices)}{shop_note}；{button}")
+
+
 class ScreenEvidenceVerifier:
     """Fallback: the evidence the model cites must actually be on the current screen."""
 
@@ -521,6 +608,9 @@ def verifier_for(task: str) -> Verifier:
         t = parse_time(task)
         if t:
             return AlarmVerifier(*t)
+    order = parse_order(task)
+    if order:
+        return CheckoutVerifier(*order)
     parts: list = []
     contact = parse_contact(task)
     if contact:

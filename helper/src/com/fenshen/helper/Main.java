@@ -16,6 +16,7 @@ import android.os.Looper;
  *   --width W --height H --dpi D        agent display size (default 720x1280/320)
  *   --ime-policy hide|local|fallback    where an IME for the agent display may appear (default hide)
  *   --no-steal-top-focus                omit STEAL_TOP_FOCUS_DISABLED (control group only)
+ *   --own-display-group                 own power group (scrcpy style; off by default, see AgentDisplay)
  *   --fps F                             cap the agent display's frame rate (0 = no cap; E8: rendering the
  *                                       agent display at 60 fps costs the user's app frames)
  *   --socket NAME                       RPC socket name (default "fenshen")
@@ -43,6 +44,7 @@ public final class Main {
         int imePolicy = AgentDisplay.IME_POLICY_HIDE;
         boolean stealTopFocusDisabled = true;
         float fps = 0;
+        boolean ownDisplayGroup = false;
         String socket = "fenshen";
         for (int i = 1; i < args.length; i++) {
             switch (args[i]) {
@@ -52,6 +54,7 @@ public final class Main {
                 case "--ime-policy": imePolicy = parseImePolicy(args[++i]); break;
                 case "--no-steal-top-focus": stealTopFocusDisabled = false; break;
                 case "--fps": fps = Float.parseFloat(args[++i]); break;
+                case "--own-display-group": ownDisplayGroup = true; break;
                 case "--socket": socket = args[++i]; break;
                 default: throw new IllegalArgumentException("unknown option: " + args[i]);
             }
@@ -59,12 +62,14 @@ public final class Main {
 
         Looper.prepareMainLooper();
         Context context = ShellEnv.createShellContext();
-        AgentDisplay display = AgentDisplay.create(context, width, height, dpi, imePolicy, stealTopFocusDisabled, fps);
+        AgentDisplay display = AgentDisplay.create(context, width, height, dpi, imePolicy, stealTopFocusDisabled, fps,
+                ownDisplayGroup);
         Runtime.getRuntime().addShutdownHook(new Thread(display::release));
 
         System.out.println("DISPLAY_ID=" + display.displayId);
         System.out.println("FLAGS=0x" + Integer.toHexString(display.flags) + " IME_POLICY=" + imePolicy
-                + " STEAL_TOP_FOCUS_DISABLED=" + stealTopFocusDisabled + " FPS_CAP=" + fps);
+                + " STEAL_TOP_FOCUS_DISABLED=" + stealTopFocusDisabled + " FPS_CAP=" + fps
+                + " OWN_DISPLAY_GROUP=" + ownDisplayGroup);
 
         if (serve) {
             Automation automation = new Automation(display);
