@@ -90,20 +90,22 @@ class DisturbanceMonitor:
         }
 
 
-def start_mirror(adb: Adb, display_id: int, title: str = "",
-                 window: tuple[int, int, int] = (20, 60, 720)) -> subprocess.Popen | None:
+def start_mirror(adb: Adb, display_id: int, title: str = "", window: tuple[int, int, int] = (20, 60, 720),
+                 ports: str = "27200:27209") -> subprocess.Popen | None:
     """Opens a scrcpy window showing a display live (view only), so people can watch it work.
     The agent display is invisible on the phone by design; this window is for the demo and debugging.
     `window` is (x, y, height); the width follows the display's aspect ratio. View only: scrcpy then
     refuses --show-touches, so finger dots on the user's screen come from the phone's own developer
     option ("Show taps"), which the user turns on themselves.
+    `ports`: scrcpy's default 27183 is the helper's forward; two mirrors sharing the fallback port race
+    for it and one of them quits, so each mirror gets its own range.
     Optional: skipped when scrcpy is neither in FENSHEN_SCRCPY nor on PATH."""
     exe = os.environ.get("FENSHEN_SCRCPY") or shutil.which("scrcpy")
     if not exe or not Path(exe).exists():
         return None
     x, y, height = window
     return subprocess.Popen(
-        [exe, "--serial", adb.serial, f"--display-id={display_id}", "--no-audio", "--no-control",
+        [exe, "--serial", adb.serial, f"--display-id={display_id}", "--no-audio", "--no-control", f"--port={ports}",
          "--window-title", title or f"Fenshen agent display {display_id} (live)",
          "--window-x", str(x), "--window-y", str(y), "--window-height", str(height)],
         # scrcpy's bundled adb differs in version from the SDK's: mixing them restarts the adb server
@@ -272,7 +274,7 @@ class Runner:
 
     def _open_mirror(self) -> subprocess.Popen | None:
         return start_mirror(self.adb, self.device.display_id, window=self.mirror_window,
-                            title=f"分身屏（手机里的隐藏虚拟屏 display {self.device.display_id}）")
+                            title=f"分身屏（手机里的隐藏虚拟屏 display {self.device.display_id}）")  # winlayout.AGENT_TITLE_PREFIX
 
     def close(self) -> None:
         if self._mirror_proc:

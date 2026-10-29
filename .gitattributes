@@ -3,3 +3,5 @@
 *.sh text eol=lf
 *.png binary
 *.jpg binary
+# cmd.exe misparses labels and gotos with LF line endings
+*.cmd text eol=crlf

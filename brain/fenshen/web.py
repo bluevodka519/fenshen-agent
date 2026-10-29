@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import threading
 import time
 import webbrowser
@@ -18,6 +19,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 from .agent import Session
+from . import winlayout
+from .device import REPO
 from .runner import RUNS, Runner, start_mirror
 
 STATIC = Path(__file__).with_name("static")
@@ -212,15 +215,65 @@ def _make_handler(dash: Dashboard):
     return Handler
 
 
-# --demo on a 1920x1080 screen: the user's screen left, the agent display next to it, and the browser
-# snapped to the right half (Win + Right) with the steps and the model's reasoning
-DEMO_USER_WINDOW = (8, 31, 990)
-DEMO_AGENT_WINDOW = (478, 31, 990)
+def _work_area() -> tuple[int, int, int, int]:
+    """(left, top, right, bottom) of the primary screen without the taskbar."""
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+            return rect.left, rect.top, rect.right, rect.bottom
+    return 0, 0, 1920, 1032
+
+
+def demo_layout() -> dict:
+    """--demo: the user's screen, the agent display and the steps side by side on the primary screen.
+    Phones are (x, y, height) for scrcpy, which keeps the ~9:20 aspect ratio; the browser is (x, y, w, h)."""
+    left, top, right, bottom = _work_area()
+    title, border = 31, 8  # Windows 11 title bar and resize border; scrcpy positions the client area
+    h = bottom - top - title - border
+    phone_w = int(h * 0.45) + 2 * border
+    bx = max(left + (right - left) // 2, left + 2 * phone_w + 20)
+    return {"user": (left + border, top + title, h),
+            "agent": (left + phone_w + 10 + border, top + title, h),
+            "browser": (bx, top, right - bx, bottom - top)}
+
+
+def _open_demo_browser(url: str, box: tuple[int, int, int, int]) -> subprocess.Popen | None:
+    """An app-mode window (no tabs, no address bar) at a fixed place. It gets its own profile, so the
+    position flags apply even when the browser is already open. Falls back to the default browser."""
+    candidates = [os.environ.get("FENSHEN_BROWSER", "")]
+    for base in filter(None, (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles"),
+                              os.environ.get("LOCALAPPDATA"))):
+        candidates += [str(Path(base) / "Microsoft/Edge/Application/msedge.exe"),
+                       str(Path(base) / "Google/Chrome/Application/chrome.exe")]
+    exe = next((c for c in candidates if c and Path(c).exists()), None)
+    if exe is None:
+        webbrowser.open(url)
+        return None
+    x, y, w, h = box
+    return subprocess.Popen([exe, f"--app={url}", f"--window-position={x},{y}", f"--window-size={w},{h}",
+                             f"--user-data-dir={REPO / '.demo-browser'}", "--no-first-run",
+                             "--no-default-browser-check"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _minimize_console() -> None:
+    """Keeps the terminal from covering the layout (best effort; Windows Terminal may ignore it)."""
+    if os.name == "nt":
+        import ctypes
+
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 6)  # SW_MINIMIZE
 
 
 def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 8765, demo: bool = False) -> None:
     dash_ref: dict = {}
-    runner = Runner(serial=serial, llm_spec=llm_spec, mirror=demo, mirror_window=DEMO_AGENT_WINDOW,
+    layout = demo_layout() if demo else None
+    runner = Runner(serial=serial, llm_spec=llm_spec, mirror=demo,
+                    mirror_window=layout["agent"] if layout else (20, 60, 720),
                     on_event=lambda kind, data: dash_ref["d"].on_event(kind, data))
     dash = Dashboard(runner)
     dash_ref["d"] = dash
@@ -232,18 +285,25 @@ def serve(serial: str | None = None, llm_spec: str | None = None, port: int = 87
     url = f"http://127.0.0.1:{port}" + ("/?demo" if demo else "")
     print(f"Fenshen dashboard: {url}  (agent display {runner.device.display_id}, model {runner.model_name})",
           flush=True)
-    user_mirror = None
-    if demo:
-        user_mirror = start_mirror(runner.adb, 0, title="我的手机屏幕（实时投屏，只看不控）", window=DEMO_USER_WINDOW)
+    user_mirror = browser = None
+    if layout:
+        time.sleep(2)  # both scrcpy instances push the same server file to the phone: don't overlap
+        user_mirror = start_mirror(runner.adb, 0, title=winlayout.USER_TITLE, window=layout["user"],
+                                   ports="27210:27219")
         if user_mirror is None or runner._mirror_proc is None:
             print("scrcpy not found: set FENSHEN_SCRCPY to scrcpy.exe to get the two phone windows", flush=True)
-        webbrowser.open(url)
+        winlayout.close_stale_browser()
+        browser = _open_demo_browser(url, layout["browser"])
+        winlayout.DemoLayout(_work_area()).start()
+        print("录屏布局：左 你的手机屏幕 | 中 分身屏 | 右 每一步。按 Ctrl+C 结束，三个窗口会一起关掉。", flush=True)
+        _minimize_console()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
-        if user_mirror:
-            user_mirror.terminate()
+        for proc in (user_mirror, browser):
+            if proc:
+                proc.terminate()
         runner.close()

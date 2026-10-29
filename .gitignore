@@ -13,3 +13,6 @@ venv/
 # local secrets / runtime traces (runs/ holds screenshots of the agent display and full model output)
 .env
 runs/
+
+# browser profile of the --demo window
+.demo-browser/
